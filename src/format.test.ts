@@ -44,8 +44,6 @@ test('the list shows one room photo (the listed type) and one bathroom photo', (
   const photos = { rooms: [{ name: 'Twin Room', url: 'twin' }, { name: 'Double Room', url: 'double' }], bedroom: ['bed'], bathroom: ['bath1', 'bath2'] };
   assert.deepEqual(listPhoto(photos, '雙人房'), ['double', 'bath1']);
   assert.deepEqual(listPhoto({ rooms: [], bedroom: ['bed'], bathroom: [] }, '雙人房'), ['bed']);
-  // APA Hotel Asakusa Tawaramachi-Ekimae, 2026-10-19: Google's "Bathroom" showed the shared washroom.
-  assert.deepEqual(listPhoto(photos, '雙人房', true), ['double']);
 });
 
 const flight = (airline: string, price: number, extra: Partial<FlightOption> = {}): FlightOption =>

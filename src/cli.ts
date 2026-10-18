@@ -275,7 +275,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const url = buildHotelNameUrl({ name: hotel.name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate, currency, country });
     // Google states "N% less than usual" for the list price; show it as money per night.
     const saving = hotel.belowUsualPct ? Math.round(hotel.nightly / (1 - hotel.belowUsualPct / 100) - hotel.nightly) : 0;
-    const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, ''), hotel.publicBath) : [];
+    const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, '')) : [];
     beginSegment(album, true);
     listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly);
     // Flush-left short lines: a caption under a photo is narrow on a phone and indents read as ragged.
@@ -366,7 +366,7 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
       const result = await cachedStays(watch, areaStay, NEARBY_CANDIDATES, NEARBY_PER_AREA);
       console.log(`\n📍 *${area.label}*\n${area.ride.replace('到', '🚃 到')}`);
       if (!result?.picks.length) { console.log('這次沒查到確認過的私人房。'); continue; }
-      printPicks(result.picks, areaStay, nights, row.price, row.currency, watch.country, number);
+      printPicks(await ownBathrooms(result.picks), areaStay, nights, row.price, row.currency, watch.country, number);
       number += result.picks.length;
     }
     return;
@@ -406,7 +406,7 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
   console.log(cheaper.length ? `\n🏷 住宿：${cheaper.length} 間比平常便宜` : '\n🏷 住宿：都是一般價');
   if (!fitting.length) console.log(`沒有評分 ${prefs.minRating} 以上的，先列全部`);
   console.log('');
-  printPicks(shown, stay, nights, row.price, row.currency, watch.country);
+  printPicks(await ownBathrooms(shown), stay, nights, row.price, row.currency, watch.country);
   // Only the link: the user found the explanations under the list noise (2026-10-18). A public bath
   // keeps one short line, since its photos read as a shared bathroom.
   console.log(`\n[看全部住宿](${allLink})`);
@@ -423,6 +423,26 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
     outbound: flights => chooseFlight(flights, prefs), inbound: (flights, airline) => chooseReturn(flights, airline, prefs) }));
 
 const COMBO_ROOM_CHECKS = 3;
+
+/**
+ * A hotel with a public bath files the bath and its shared washrooms under Google's "Bathroom"
+ * (APA Asakusa, 2026-10-19), and the user wants the room's own bathroom: it comes from the hotel's
+ * Booking page (cached; one page per such hotel), else the hotel gets no bathroom photo.
+ */
+async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
+  const result: Pick[] = [];
+  for (const pick of picks) {
+    if (!pick.hotel.publicBath || !pick.photos) { result.push(pick); continue; }
+    const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
+    const bookingUrl = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
+    const found = bookingUrl ? await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(() => null) : null;
+    const listed = pick.note.replace(/^[✅❔] /, '');
+    const rooms = found?.rooms ?? [];
+    const bathroom = [...rooms.filter(room => roomType(room.name) === listed), ...rooms].map(room => room.bathroomPhoto).find(Boolean);
+    result.push({ ...pick, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
+  }
+  return result;
+}
 
 /** Whether a Booking room suits the party: fits them, its own bathroom, no bunk or dorm bed. */
 const suitsParty = (room: BookingRoom) => !isDormBed(room.name) && room.bathroom !== 'shared' && !room.bunkInPhotos
@@ -474,7 +494,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   // The checked room's own photos on Booking (its views and its bathroom) beat Google's groups,
   // which mix in public baths and shared washrooms.
   const roomPhotos = checked?.room?.photos.length ? checked.room.photos : null;
-  beginSegment(roomPhotos ?? (pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, ''), pick.hotel.publicBath) : []), true);
+  beginSegment(roomPhotos ?? (pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, '')) : []), true);
 
   const buy = booking ? chooseBookingOption(booking.options, prefs.oneTicketPremium) : null;
   if (booking && buy) {

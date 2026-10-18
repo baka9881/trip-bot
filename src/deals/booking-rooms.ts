@@ -15,6 +15,8 @@ export interface BookingRoom {
   beds: string[]; // e.g. ["1 double bed"]
   bathroom: 'private' | 'shared' | null;
   photos: string[];
+  /** The room's own bathroom photo, for hotels whose Google "Bathroom" photos show a public bath. */
+  bathroomPhoto?: string | null;
   /** Its photos show a bunk or loft bed, whatever the bed list says. */
   bunkInPhotos: boolean;
   /** Sold through Booking Basic (a reseller, block id "bbasic…"): no room photos, other terms. */
@@ -69,14 +71,14 @@ export function parseRoomPhotos(html: string): Map<string, string[]> {
  * list a room as "2 single beds" while its photos show one bed up a ladder (2026-10-18, DOYANEN
  * HOTELS BAKURO), which the user should hear before booking.
  */
-export function parseRoomPhotoSets(html: string): Map<string, { urls: string[]; bunk: boolean }> {
-  const byRoom = new Map<string, { urls: string[]; bunk: boolean }>();
+export function parseRoomPhotoSets(html: string): Map<string, { urls: string[]; bunk: boolean; bathroom: string | null }> {
+  const byRoom = new Map<string, { urls: string[]; bunk: boolean; bathroom: string | null }>();
   const alts = new Map<string, string>();
   for (const match of html.matchAll(/"AccommodationPhoto:(\d+)":\{[^{}]*?"altText":"((?:[^"\\]|\\.)*)"/g)) alts.set(match[1]!, match[2]!);
   const urls = parseRoomPhotoUrls(html, alts);
   for (const [room, photos] of urls) {
     const bunk = photos.some(photo => /\b(bunk|loft|ladder)\b/i.test(photo.alt));
-    byRoom.set(room, { urls: roomViewsFirst(photos), bunk });
+    byRoom.set(room, { urls: roomViewsFirst(photos), bunk, bathroom: photos.find(photo => photo.kind === 'bathroom')?.url ?? null });
   }
   return byRoom;
 }
@@ -136,7 +138,8 @@ async function readRooms(page: Page): Promise<BookingRoom[]> {
     const known = byId.get(row.id);
     if (known && (parsed.stayTotal ?? Infinity) >= (known.stayTotal ?? Infinity)) continue;
     byId.set(row.id, { name: row.name || known?.name || last.name, ...parsed, ...parseRoomFacts(row.room || last.room),
-      photos: (photos.get(row.id)?.urls ?? []).slice(0, PHOTOS_PER_ROOM), bunkInPhotos: photos.get(row.id)?.bunk ?? false, resale: !/^\d+$/.test(row.id) });
+      photos: (photos.get(row.id)?.urls ?? []).slice(0, PHOTOS_PER_ROOM), bunkInPhotos: photos.get(row.id)?.bunk ?? false,
+      bathroomPhoto: photos.get(row.id)?.bathroom ?? null, resale: !/^\d+$/.test(row.id) });
   }
   return [...byId.values()].slice(0, MAX_ROOM_TYPES);
 }

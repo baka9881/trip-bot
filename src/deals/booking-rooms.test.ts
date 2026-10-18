@@ -49,6 +49,15 @@ describe('Booking.com rooms', () => {
     expect(sets.get('229544903')?.bunk).toBe(false);
   });
 
+  // APA Hotel Asakusa Tawaramachi-Ekimae (2026-10-19): Google's "Bathroom" showed its public bath.
+  it('keeps each room\'s own bathroom photo, never a public bath', () => {
+    const html = `{ id: '1', large_url: 'https://cf.bstatic.com/xdata/images/hotel/max1024x768/1.webp?k=a&o=' ,associated_rooms: [ '7' ] },
+      "AccommodationPhoto:1":{"__typename":"AccommodationPhoto","id":1,"altText":"a public bath with sinks and stools","x":{}},
+      { id: '2', large_url: 'https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.webp?k=b&o=' ,associated_rooms: [ '7' ] },
+      "AccommodationPhoto:2":{"__typename":"AccommodationPhoto","id":2,"altText":"a white bathroom with a sink and a tub","x":{}}`;
+    expect(parseRoomPhotoSets(html).get('7')?.bathroom).toBe('https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.jpg?k=b&o=');
+  });
+
   it('tells room and bathroom photos from amenity close-ups', () => {
     expect(photoKind('a hotel room with two beds and a desk')).toBe('room');
     expect(photoKind('a white bathroom with a sink and a shower')).toBe('bathroom');
