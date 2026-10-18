@@ -23,10 +23,13 @@ import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './dea
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
-import { airlineName, bedText, flightLines, shortDuration, withAdults, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
+import { airlineName, bedText, flightLines, phoneLines, shortDuration, withAdults, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { auditFlights, auditStays, type AuditPick } from './audit';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { checkOutput } from './rules';
 
 /** Telegram buttons for the output; each label comes back as the user's message when tapped. */
 let keyboard: string[][] = [];
@@ -466,9 +469,10 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
     console.log(`✈️ [${cityLabel(row.city)} 來回每人 ${money(row.price, currency)}](${buildCardSearchUrl(watch.origin, stay, currency)})\n沒選到符合時段的航班`);
     return row.price;
   }
-  // Times are local (Japan is an hour ahead of Taiwan), so the time in the air goes with them:
-  // 14:25→18:30 read as four hours to the user (2026-10-19).
-  const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}・飛 ${shortDuration(flight.duration)}`;
+  // Times are local (Japan is an hour ahead of Taiwan), so the time in the air goes with them
+  // (14:25→18:30 read as four hours to the user, 2026-10-19), on the next line: a four-character
+  // airline name (泰國獅航) leaves no room on this one.
+  const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
   // Separate tickets are two bookings: each leg links its airline's own page (2026-10-19, the user
   // got one link for two tickets); otherwise Google's booking page for the whole trip.
   const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
@@ -477,9 +481,10 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
   const arrival = atHotel(booking.outbound);
   const leave = leavesHotel(booking.inbound);
   console.log(`✈️ [去 ${legs(booking.outbound)}](${separate ? legLink(booking.legLinks?.outbound) : booking.url})`);
-  console.log(`${fitsCheckIn(booking.outbound) ? '' : '⚠️ '}約 ${clock(arrival)} 到飯店・${prefs.hotelCheckIn} 起入住`);
+  console.log(`${fitsCheckIn(booking.outbound) ? '' : '⚠️ '}飛 ${shortDuration(booking.outbound.duration)}・約 ${clock(arrival)} 到飯店`);
   console.log(separate ? `[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})` : `回 ${legs(booking.inbound)}`);
-  console.log(`${fitsCheckOut(booking.inbound, prefs) ? '' : '⚠️ '}${clock(leave)} 離開飯店・${prefs.hotelCheckOut} 退房`);
+  console.log(`${fitsCheckOut(booking.inbound, prefs) ? '' : '⚠️ '}飛 ${shortDuration(booking.inbound.duration)}・${clock(leave)} 離開飯店`);
+  console.log(`飯店 ${prefs.hotelCheckIn} 入住・${prefs.hotelCheckOut} 退房`);
   const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
   console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
   const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
@@ -648,7 +653,8 @@ async function roomsFor(which: string | undefined) {
     const bunk = room.beds.some(bed => /bunk/i.test(bed)) || room.bunkInPhotos;
     const type = room.guests === 1 ? '單人房' : bunk ? '上下鋪房' : named === '私人房' && byBeds ? byBeds : named;
     console.log(`🛏 *${type}*\n${room.name}`);
-    if (facts.length) console.log(facts.join('・'));
+    // Short lines: a room with four kinds of beds did not fit a phone on one line (2026-10-19).
+    for (const line of phoneLines(facts)) console.log(line);
     // The hotel's own photos outrank its bed list: say so when they disagree.
     if (room.bunkInPhotos && !room.beds.some(bed => /bunk/i.test(bed))) console.log('⚠️ 照片是上下鋪（一張床在上層，要爬梯子）');
     if (room.guests !== null) console.log(`可住 ${room.guests} 人${room.guests < travelers ? `　⚠️ 你們 ${travelers} 人住不下` : ''}`);
@@ -875,7 +881,46 @@ async function selfCheck(): Promise<string[]> {
   // implausible or inconsistent prices, missing photos), not notes such as a hotel without a site link.
   const NOTES = /沒有任何訂房網站價格|共用衛浴/;
   problems.push(...auditCache().filter(problem => !NOTES.test(problem)).slice(0, 8));
+  // Messages that went out breaking one of the user's rules since the last check.
+  problems.push(...recentRuleProblems(Date.now() - 86_400_000).slice(0, 8));
+  // And today's data through every command, as the user would tap through it.
+  const checked = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, 'check'], { encoding: 'utf8', timeout: 1_800_000 });
+  problems.push(...(checked.stdout ?? '').split('\n').filter(line => line.startsWith('✗')).map(line => line.slice(2)).slice(0, 8));
   return problems;
+}
+
+const LOGS_DIR = new URL('../logs/', import.meta.url);
+const RULES_LOG = new URL('../logs/rules.log', import.meta.url);
+
+/** Rule problems logged since a time, as "command：problem", each once. */
+function recentRuleProblems(since: number): string[] {
+  let log = '';
+  try { log = readFileSync(RULES_LOG, 'utf8'); } catch { return []; }
+  const found = log.split('\n').map(line => line.split('\t')).filter(([at]) => at && Date.parse(at) >= since)
+    .map(([, ran, problem]) => `${ran}：${problem}`);
+  return [...new Set(found)];
+}
+
+/**
+ * Render every command the user taps through, as Telegram would get it, and check each against the
+ * user's rules (src/rules.ts): the flight list, each trip length's first option with its hotels, the
+ * room photos of the first listed hotels, and a dated trip. Run after every change, before saying it
+ * is done. Uses the caches, so it opens few pages.
+ */
+async function checkAll() {
+  const entries = [...new Set((await activeWatches()).filter(({ watch }) => watch.lastScanAt).map(({ letter }) => letter))];
+  const runs: string[][] = [['report', 'all', '--limit', '5'], ...entries.map(letter => ['hotels-for', `${letter}1`])];
+  if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', '1'], ['rooms', '2']);
+  let failures = 0;
+  for (const run of runs) {
+    const result = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, ...run, '--check'], { encoding: 'utf8', timeout: 600_000 });
+    const verdict = (result.stdout ?? '').trim().split('\n').filter(line => /^[✓✗]/.test(line));
+    const error = (result.stderr ?? '').split('\n').filter(line => line && !/ExperimentalWarning|--trace-warnings|^\[deals\]/.test(line)).join(' ').slice(0, 200);
+    if (verdict.some(line => line.startsWith('✗')) || (!verdict.length && error)) failures++;
+    print(`${run.join(' ')}\n${verdict.length ? verdict.join('\n') : error ? `✗ ${error}` : '（沒有輸出）'}`);
+  }
+  print(failures ? `\n${failures} 個指令有問題` : '\n全部符合規則');
+  if (failures) process.exitCode = 1;
 }
 
 /** A queued scan alert (promotion, daily list, scan health) as one Telegram message. */
@@ -974,8 +1019,9 @@ const [command = 'report', ...args] = process.argv.slice(2);
 const limitIndex = args.indexOf('--limit');
 const limit = limitIndex >= 0 ? Math.min(40, Math.max(1, Number(args[limitIndex + 1]) || 10)) : 10;
 const toTelegram = args.includes('--telegram');
+const checkOnly = args.includes('--check'); // render as for Telegram, check the user's rules, send nothing
 const print = console.log;
-if (toTelegram) console.log = (...parts: unknown[]) => {
+if (toTelegram || checkOnly) console.log = (...parts: unknown[]) => {
   const segment = segments.at(-1)!;
   const line = parts.map(String).join(' ');
   segment.text = segment.text ? `${segment.text}\n${line}` : line;
@@ -1000,9 +1046,23 @@ try {
   else if (command === 'jobs') await runJobs();
   else if (command === 'tick') await tick();
   else if (command === 'audit') audit();
+  else if (command === 'check') await checkAll();
   else throw new Error('指令：report、trip、hotels-for、rooms、watch、watch-hotel、watches、unwatch、travelers、regions、add-region、remove-region、scan-now、jobs');
-  if (toTelegram && segments.some(segment => segment.text)) {
+  if ((toTelegram || checkOnly) && segments.some(segment => segment.text)) {
     console.log = print;
+    const problems = checkOutput(segments, keyboard, { travelers, nonSmoking: readUserPrefs().nonSmoking });
+    if (checkOnly) {
+      print(problems.length ? problems.map(problem => `✗ ${problem}`).join('\n') : '✓');
+      if (problems.length) process.exitCode = 1;
+    } else if (problems.length) {
+      // Sent anyway (the user asked for it), but logged for the daily self-check and the developer.
+      mkdirSync(LOGS_DIR, { recursive: true });
+      const ran = [command, ...args.filter(arg => arg !== '--telegram')].join(' ');
+      appendFileSync(RULES_LOG, problems.map(problem => `${new Date().toISOString()}\t${ran}\t${problem}\n`).join(''));
+      console.error(`[rules] ${problems.length} problem(s): ${problems.join(' | ')}`);
+    }
+  }
+  if (toTelegram && segments.some(segment => segment.text)) {
     const text = segments.map(segment => segment.text).filter(Boolean).join('\n');
     try {
       await sendToTelegram(segments, keyboard);

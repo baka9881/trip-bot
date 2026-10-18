@@ -153,3 +153,15 @@ export function withAdults(link: string, adults: number): string {
     return url.toString();
   } catch { return link; }
 }
+
+/** Parts joined with "・" into as few lines as fit a phone. */
+export function phoneLines(parts: readonly (string | null | undefined | false)[]): string[] {
+  const lines: string[] = [];
+  for (const part of parts) {
+    if (!part) continue;
+    const last = lines.at(-1);
+    if (last !== undefined && phoneWidth(`${last}・${part}`) <= PHONE_WIDTH) lines[lines.length - 1] = `${last}・${part}`;
+    else lines.push(part);
+  }
+  return lines;
+}
