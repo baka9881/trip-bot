@@ -473,7 +473,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   const site = pick ? siteForPrice(pick.sites, nightly) : null;
   beginSegment(pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, '')) : [], true);
 
-  const buy = booking ? chooseBookingOption(booking.options) : null;
+  const buy = booking ? chooseBookingOption(booking.options, prefs.oneTicketPremium) : null;
   if (booking && buy) {
     const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
     const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
@@ -957,7 +957,7 @@ function audit() {
 
 const PREF_NAMES: Record<keyof Prefs, string> = {
   departAfter: '最早出發', departBefore: '最晚出發', checkedBag: '托運行李', bagFeeEstimate: '廉航行李費估算（每人來回）',
-  minStars: '最低星級', minRating: '最低評分', maxPerPerson: '每人預算上限',
+  minStars: '最低星級', minRating: '最低評分', maxPerPerson: '每人預算上限', oneTicketPremium: '一張票最多可以貴多少',
 };
 
 /** Show the preferences, or set one: `prefs minRating 4.2`, `prefs checkedBag false`, `prefs maxPerPerson none`. */
@@ -974,7 +974,8 @@ function setPrefs(key: string | undefined, value: string | undefined) {
   }
   const prefs = readPrefs(settings.prefs);
   console.log(['你的偏好', `出發時間 ${prefs.departAfter}–${prefs.departBefore}`, `托運行李：${prefs.checkedBag ? `要（廉航加估算 ${money(prefs.bagFeeEstimate, 'TWD')}）` : '不用'}`,
-    `飯店 ${prefs.minStars} 星以上、評分 ${prefs.minRating} 以上`, `每人預算：${prefs.maxPerPerson === null ? '不限' : money(prefs.maxPerPerson, 'TWD')}`].join('\n'));
+    `飯店 ${prefs.minStars} 星以上、評分 ${prefs.minRating} 以上`, `每人預算：${prefs.maxPerPerson === null ? '不限' : money(prefs.maxPerPerson, 'TWD')}`,
+    prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂'].join('\n'));
 }
 
 function setTravelers(value: string | undefined) {

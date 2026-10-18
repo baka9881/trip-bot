@@ -28,18 +28,20 @@ describe('preferences', () => {
     expect(chooseFlight(flights, { ...DEFAULT_PREFS, checkedBag: false })?.airline).toBe('Peach');
   });
 
-  it('buys one ticket unless separate tickets save more than NT$1,000', () => {
+  it('buys separate tickets whenever they are cheaper, unless a premium for one ticket is set', () => {
     // Scoot, Taipei–Tokyo Oct 29–Nov 2: one ticket NT$9,856, separate tickets NT$8,276.
     const scoot = [{ separateTickets: true, price: 8276 }, { separateTickets: false, price: 9856 }];
-    expect(chooseBookingOption(scoot)).toEqual({ chosen: scoot[0], other: scoot[1] });
-    const close = [{ separateTickets: true, price: 9200 }, { separateTickets: false, price: 9856 }];
-    expect(chooseBookingOption(close)).toEqual({ chosen: close[1], other: close[0] });
-    expect(chooseBookingOption([])).toBeNull();
+    expect(chooseBookingOption(scoot, DEFAULT_PREFS.oneTicketPremium)).toEqual({ chosen: scoot[0], other: scoot[1] });
+    expect(chooseBookingOption(scoot, 2000)).toEqual({ chosen: scoot[1], other: scoot[0] });
+    const tie = [{ separateTickets: true, price: 9856 }, { separateTickets: false, price: 9856 }];
+    expect(chooseBookingOption(tie, 0)?.chosen.separateTickets).toBe(false);
+    expect(chooseBookingOption([], 0)).toBeNull();
   });
 
-  it('pairs a return on the same airline unless it costs much more', () => {
+  it('pairs the cheapest return, the same airline only within the one-ticket premium', () => {
     const returns = [flight('Jetstar', 7825, '14:55', true), flight('AirAsia', 7900, '11:00', true), flight('AirAsia', 8500, '20:00', true)];
-    expect(chooseReturn(returns, 'AirAsia', DEFAULT_PREFS)?.price).toBe(7900);
-    expect(chooseReturn(returns, 'Peach Aviation', DEFAULT_PREFS)?.airline).toBe('Jetstar');
+    expect(chooseReturn(returns, 'AirAsia', DEFAULT_PREFS)?.airline).toBe('Jetstar');
+    expect(chooseReturn(returns, 'AirAsia', { ...DEFAULT_PREFS, oneTicketPremium: 1000 })?.price).toBe(7900);
+    expect(chooseReturn([flight('Jetstar', 7900, '14:55', true), flight('AirAsia', 7900, '11:00', true)], 'AirAsia', DEFAULT_PREFS)?.airline).toBe('AirAsia');
   });
 });
