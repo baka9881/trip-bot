@@ -326,9 +326,6 @@ async function hotelsFor(code: string | undefined, nearby = false) {
   const watchButton = `🔔 ${code!.toUpperCase()} 降價通知我`;
   keyboard = !nearby && nearbyAreas(row.city).length
     ? [[`${code!.toUpperCase()} ${NEARBY_BUTTON}`], [watchButton], [FLIGHT_LIST_BUTTON]] : [[watchButton], [FLIGHT_LIST_BUTTON]];
-  const party = travelers === 1 ? '房價是一間 2 人房、機票 1 人。'
-    : `${travelers} 人同行：每間 2 人、共 ${roomsNeeded} 間，機票 × ${travelers}。`;
-  const footer = `只賣床位的已排除；標「❔」的是 Google 沒列房型。\n每晚是後面那個網站的價格；冷門網站便宜超過 NT$200 才推它。\n${party}\n評分用 Google，沒有時用 Trip.com／Tripadvisor。`;
 
   if (nearby) {
     const areas = nearbyAreas(row.city);
@@ -346,7 +343,6 @@ async function hotelsFor(code: string | undefined, nearby = false) {
       printPicks(result.picks, areaStay, nights, row.price, row.currency, watch.country, number);
       number += result.picks.length;
     }
-    console.log(`\n${footer}\n車程是大概時間。`);
     return;
   }
 
@@ -379,10 +375,10 @@ async function hotelsFor(code: string | undefined, nearby = false) {
   console.log(cheaper.length ? `\n🏷 住宿：${cheaper.length} 間比平常便宜` : '\n🏷 住宿：都是一般價');
   console.log('');
   printPicks(result.picks, stay, nights, row.price, row.currency, watch.country);
-  console.log(`\n[看全部住宿](${all})\n${footer}`);
-  // Google files a public bath's photos under "Bathroom", so say what one is when the list has it.
-  if (result.picks.some(pick => pick.hotel.publicBath)) console.log('♨️ 大浴場是男女分開的公共澡堂，想泡再去；房間有自己的衛浴（標「共用衛浴」的才沒有）。浴室照片可能是大浴場。');
-  if (nearbyAreas(row.city).length) console.log(`\n💡 點「${code!.toUpperCase()} ${NEARBY_BUTTON}」\n   查${nearbyAreas(row.city).map(area => area.label.replace(/（.*）/, '')).join('、')}`);
+  // Only the link: the user found the explanations under the list noise (2026-10-18). A public bath
+  // keeps one short line, since its photos read as a shared bathroom.
+  console.log(`\n[看全部住宿](${all})`);
+  if (result.picks.some(pick => pick.hotel.publicBath)) console.log('♨️ 大浴場＝公共澡堂，房間有自己的衛浴');
 }
 
 function regions() {
