@@ -1,0 +1,4 @@
+name: flight-deal-buttons
+version: 1.0.0
+description: "Inline buttons on the Flight Finder deal lists: a tap is handled as if the user had typed the button's text (e.g. 'B4 東京')."
+author: "shiro"

@@ -1,0 +1,10 @@
+#!/bin/sh
+# trip-bot command line (src/cli.ts) on the system Node. Not Node under Hermes' cache/scratch:
+# Hermes prunes that folder (it removed node24 on 2026-10-18). node.exe gets C:/ paths because
+# Hermes' bash does not convert /c/... arguments for Windows programs.
+cd /c/Users/shiro/AppData/Local/hermes/profiles/trip/projects/trip-bot || exit 1
+# tsx runs the code in a child node, which inherits the warning switch only through NODE_OPTIONS.
+export NODE_OPTIONS="--disable-warning=ExperimentalWarning"
+exec "/c/Program Files/nodejs/node.exe" --disable-warning=ExperimentalWarning \
+  C:/Users/shiro/AppData/Local/hermes/profiles/trip/projects/trip-bot/node_modules/tsx/dist/cli.mjs \
+  C:/Users/shiro/AppData/Local/hermes/profiles/trip/projects/trip-bot/src/cli.ts "$@"
