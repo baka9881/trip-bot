@@ -74,7 +74,7 @@ describe('messages', () => {
 
   it('writes a Chinese promotion alert with the usual price and a search link', () => {
     const message = dealMessage({ quote: quote('Okinawa', 5499), usualPrice: 7200, discount: 1 - 5499 / 7200, samples: 6 }, context);
-    expect(message.title).toContain('日本促銷（約一週）：沖繩');
+    expect(message.title).toContain('約一週促銷');
     expect(message.body).toContain('台北 → 沖繩 來回');
     expect(message.body).toContain('直飛');
     expect(message.body).toContain('11/01–11/07');

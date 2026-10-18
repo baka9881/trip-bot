@@ -122,9 +122,22 @@ export function pickFlights(flights: readonly FlightOption[], limit: number): Fl
  */
 export function flightLines(flights: readonly FlightOption[], currency: string, limit = 5): string[] {
   return pickFlights(flights, limit).map((flight, index) => {
-    const tags = [flight.lowCost ? '廉航（行李另付）' : null].filter(Boolean);
+    const tags = [flight.lowCost ? '廉航' : null].filter(Boolean);
     const duration = flight.duration.replace(/ hr ?/, 'h').replace(/ min/, '').replace(/h(\d)$/, 'h0$1');
     return `${index + 1}. ${airlineName(flight.airline)} ${money(flight.price, currency)}${tags.length ? `・${tags.join('・')}` : ''}`
       + `\n${flight.departs}→${flight.arrives}・${flight.stops === 0 ? '直飛' : `轉機 ${flight.stops} 次`}・${duration}`;
   });
 }
+
+/** How wide a line shows on a phone: link text only, CJK and emoji count double. */
+export function phoneWidth(line: string): number {
+  const shown = line.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*️]/g, '');
+  return [...shown].reduce((width, char) => width + (/[☀-➿⺀-￯]|[\u{1F000}-\u{1FFFF}]/u.test(char) ? 2 : 1), 0);
+}
+
+/** Wider than this, a line wraps under a photo on a phone (the user has asked twice, 2026-10-19). */
+export const PHONE_WIDTH = 32;
+
+/** Lines of a message that would wrap on a phone; a hotel's or room's name may wrap, it cannot be shortened. */
+export const tooWide = (text: string) =>
+  text.split('\n').filter(line => !/^(\d+\. |🏨 )\[/.test(line) && !/^[\x20-\x7E]+$/.test(line) && phoneWidth(line) > PHONE_WIDTH);

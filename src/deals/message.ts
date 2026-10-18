@@ -43,7 +43,7 @@ export function dealMessage(deal: Deal, context: DealContext, hotels: HotelSumma
   const saving = Math.round(deal.usualPrice - quote.price);
   const url = buildCardSearchUrl(context.origin, quote, context.currency);
   return {
-    title: `${context.regionLabel}促銷（${context.tripLabel}）：${cityLabel(quote.city)} ${money(quote.price, context.currency)}`,
+    title: `${cityLabel(quote.city)} ${money(quote.price, context.currency)}・${context.tripLabel}促銷`,
     body: `${context.originLabel} → ${cityLabel(quote.city)} 來回 ${money(quote.price, context.currency)}`
       + `\n${dates(quote)}・${stops(quote)}`
       + `\n📉 比平常便宜 ${money(saving, context.currency)}`

@@ -2,7 +2,7 @@
 // Each case is a mistake that reached the user once, or a rule the user set.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { airlineName, flightLines, listPhoto, pickFlights, recommendedSite, roomType, siteForPrice } from './format';
+import { airlineName, flightLines, listPhoto, PHONE_WIDTH, phoneWidth, pickFlights, recommendedSite, roomType, siteForPrice, tooWide } from './format';
 import { callbackData, chunks } from './telegram';
 import type { FlightOption } from './deals/flight-list';
 
@@ -65,8 +65,19 @@ test('airlines read in Chinese, codeshares by their operating airline', () => {
 
 test('each flight is two short lines that fit a phone', () => {
   const [lines] = flightLines([flight('Peach Aviation', 11137, { lowCost: true, departs: '18:50', arrives: '22:20' })], 'TWD');
-  assert.equal(lines, '1. 樂桃 NT$11,137・廉航（行李另付）\n18:50→22:20・直飛・2h30');
+  assert.equal(lines, '1. 樂桃 NT$11,137・廉航\n18:50→22:20・直飛・2h30');
   for (const line of lines!.split('\n')) assert.ok(line.length <= 26, `too long for a phone: ${line}`);
+});
+
+test('combo and list lines fit a phone', () => {
+  // Lines that wrapped on the user's phone (2026-10-19) and how they read now.
+  assert.ok(phoneWidth('2 人總共約 NT$31,412・每人 NT$15,706') > PHONE_WIDTH);
+  assert.ok(phoneWidth('📊 機票 Google ✅ 偏低・比平常便宜 NT$1,284') > PHONE_WIDTH);
+  const combo = ['⭐ *推薦組合*', '東京 10/29–11/04・6 晚', '📊 機票 Google ✅ 偏低', '比平常便宜 NT$1,284',
+    '✈️ [去 酷航 14:25→18:30](https://x)', '回 捷星 08:30→11:50', '來回每人 NT$7,327', '＋托運行李約 NT$1,800（估算）',
+    '分開訂兩張票・省 NT$1,580', '🏨 [APA Hotel Asakusa Tawaramachi-Ekimae](https://x)', '⭐4.1・雙人房・11 m²・♨️大浴場',
+    '✅ 私人衛浴・住得下（Booking）', '每晚含稅 NT$5,112', '在 [Hotelscombined](https://x) 訂', '2 人總共約 NT$39,894', '每人 NT$19,947'];
+  assert.deepEqual(tooWide(combo.join('\n')), []);
 });
 
 test('Telegram messages split between hotels and stay under the link limit', () => {

@@ -3,6 +3,7 @@
 // tap into an ordinary message, so "B4 東京" reaches the agent exactly as if the user had typed it.
 // Hermes' own button prompts allow only four choices, too few for a fare list.
 import { readFileSync } from 'node:fs';
+import { tooWide } from './format';
 
 const PROFILE = 'C:/Users/shiro/AppData/Local/hermes/profiles/trip';
 const MAX_TEXT = 4000; // Telegram's limit is 4096 characters per message
@@ -118,6 +119,7 @@ export async function sendToTelegram(segments: readonly Segment[], keyboard: rea
   for (const segment of segments) {
     const text = segment.text.replace(/^\n+|\n+$/g, '');
     if (!text && !segment.photos.length) continue;
+    for (const line of tooWide(text)) console.error(`[telegram] wraps on a phone: ${line}`);
     if (segment.photos.length && shownLength(text) <= MAX_CAPTION) {
       await flush(false);
       if (await sendAlbum(token, chatId, segment.photos, text)) continue;

@@ -98,15 +98,15 @@ async function usualPrices(watch: { id: string; lastScanAt: Date | null }) {
 }
 
 /**
- * "📉 比平常便宜 NT$800" style tag against the city's usual price, in money
+ * "比平常便宜 NT$800" style tag against the city's usual price, in money
  * rather than percent. Within 5% counts as the usual price. Empty while the
  * history is too short.
  */
 function versusUsual(price: number, usual: { median: number } | undefined, currency: string): string {
   if (!usual) return '';
   const difference = Math.round(price - usual.median);
-  if (Math.abs(difference) < usual.median * 0.05) return '｜≈ 平常價';
-  return difference < 0 ? `｜📉 比平常便宜 ${money(-difference, currency)}` : `｜📈 比平常貴 ${money(difference, currency)}`;
+  if (Math.abs(difference) < usual.median * 0.05) return '・≈ 平常價';
+  return difference < 0 ? `・比平常便宜 ${money(-difference, currency)}` : `・比平常貴 ${money(difference, currency)}`;
 }
 
 const MARKET_TEXT: Record<MarketLevel, string> = {
@@ -153,7 +153,7 @@ async function report(filter: string, limit: number) {
       const url = buildCardSearchUrl(watch.origin, row, row.currency);
       const versus = versusUsual(row.price, usual.get(row.city), row.currency);
       console.log(`*${letter}${index + 1}* [${cityLabel(row.city)}](${url}) ${money(row.price, row.currency)}${row.stops === 0 ? '' : ` 轉${row.stops}`}`);
-      console.log(`   ${md(row.outboundDate)}–${md(row.returnDate)}${versus}`);
+      console.log(`${md(row.outboundDate)}–${md(row.returnDate)}${versus}`);
     });
   }
   const since = new Date(Date.now() - 7 * 86_400_000);
@@ -162,14 +162,16 @@ async function report(filter: string, limit: number) {
     console.log(`\n🔥 *最近的促銷*`);
     for (const deal of deals) {
       const message = deal.message as { title?: string; url?: string };
-      console.log(`• ${message.url ? `[${message.title ?? '促銷'}](${message.url})` : message.title ?? ''}`);
+      // Alerts saved before 2026-10-19 carry the older, wider title "日本促銷（週末）：帶廣 NT$16,359".
+      const title = (message.title ?? '促銷').replace(/^.+促銷（(.+)）：(.+)$/, '$2・$1促銷');
+      console.log(`• ${message.url ? `[${title}](${message.url})` : title}`);
     }
   }
   keyboard.push([FLIGHT_LIST_BUTTON]);
-  console.log('\n🏨 點下方按鈕（或回代碼如 B1）看住宿');
+  console.log('\n🏨 點按鈕看住宿');
   console.log(travelers > 1
-    ? `直飛不另標示。價格是每人來回（目前設定 ${travelers} 人同行），行李費另計。`
-    : '直飛不另標示。1 人來回價，行李費另計。');
+    ? `每人來回價（${travelers} 人同行）\n行李另計・直飛不另標示`
+    : '1 人來回價\n行李另計・直飛不另標示');
 }
 
 const MAX_HOTELS = 6;
@@ -283,13 +285,13 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     // "私人房" only means the site named no type; it says nothing, so leave it out.
     const type = note.replace(/^✅ /, '');
     console.log([hotel.rating !== null ? `⭐${hotel.rating}` : null, type === '私人房' ? null : type, hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
-    const booking = site ? `・[${siteName(site.site)}](${site.url ?? url}) 訂` : '';
+    const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : '';
     console.log(`每晚含稅 ${money(nightly, currency)}${booking}${saving > 0 ? `\n🏷 比平常省 ${money(saving, currency)}／晚` : ''}`);
     if (travelers === 1) console.log(`${nights}晚 ${money(cost.stay, currency)}・含機票 ${money(cost.total, currency)}`);
     else {
       // Party totals: rooms for everyone plus every person's fare, then each person's share.
       console.log(`${nights}晚${roomsNeeded > 1 ? ` ${roomsNeeded}間` : ''} ${money(cost.stay, currency)}`);
-      console.log(`${travelers}人含機票 ${money(cost.total, currency)}・每人 ${money(cost.each, currency)}`);
+      console.log(`${travelers}人含機票 ${money(cost.total, currency)}\n每人${money(cost.each, currency)}`);
     }
   });
   beginSegment(); // what follows the hotels is plain text again
@@ -346,7 +348,7 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
   const stay: Stay = { city: row.city, outboundDate: row.outboundDate, returnDate: row.returnDate };
   const nights = nightsOf(row);
   const fare = travelers > 1 ? `每人 ${money(row.price, row.currency)}` : money(row.price, row.currency);
-  const flightLine = `✈️ ${code!.toUpperCase()} ${cityLabel(row.city)} ${fare}・${row.stops === 0 ? '直飛' : `轉${row.stops}次`}・${label}`;
+  const flightLine = `✈️ ${code!.toUpperCase()} ${cityLabel(row.city)} ${fare}\n${row.stops === 0 ? '直飛' : `轉${row.stops}次`}・${label}`;
   lastStayFor = { ...stay, currency: row.currency, country: watch.country, origin: watch.origin };
   const watchButton = `🔔 ${code!.toUpperCase()} 降價通知我`;
   keyboard = !nearby && nearbyAreas(row.city).length
@@ -410,7 +412,7 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
   // Only the link: the user found the explanations under the list noise (2026-10-18). A public bath
   // keeps one short line, since its photos read as a shared bathroom.
   console.log(`\n[看全部住宿](${allLink})`);
-  if (shown.some(pick => pick.hotel.publicBath)) console.log('♨️ 大浴場＝公共澡堂，房間有自己的衛浴');
+  if (shown.some(pick => pick.hotel.publicBath)) console.log('♨️ 大浴場＝公共澡堂，房內有衛浴');
 }
 
 /** The user's preferences (data/settings.json "prefs"), over the defaults. */
@@ -484,7 +486,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   console.log(`⭐ *推薦組合*\n${cityLabel(row.city)} ${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚`);
   const market = verdictPage?.market ?? null;
   const amount = market?.versusUsual?.replace(/^(\S+) cheaper$/, '比平常便宜 $1').replace(/^(\S+) more expensive$/, '比平常貴 $1');
-  if (market) console.log(`📊 機票 Google ${MARKET_TEXT[market.level].replace(/（.*）/, '')}${amount ? `・${amount}` : ''}`);
+  if (market) console.log(`📊 機票 Google ${MARKET_TEXT[market.level].replace(/（.*）/, '')}${amount ? `\n${amount}` : ''}`);
   keyboard = [[`🏨 ${code} ${OTHER_HOTELS_BUTTON}`], [watchButton], [FLIGHT_LIST_BUTTON]];
 
   const checked = await verifiedForCombo((result?.picks ?? []).filter(candidate => fitsPrefs(candidate, prefs)));
@@ -501,14 +503,12 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
     const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
     const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
     console.log(`✈️ [去 ${legs(booking.outbound)}](${booking.url})\n回 ${legs(booking.inbound)}`);
-    console.log(`來回每人 ${money(buy.chosen.price, currency)}${buy.chosen.separateTickets ? '（分開訂兩張票）' : '（一張票）'}`
-      + `${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
-    if (buy.other) {
-      const difference = Math.abs(buy.other.price - buy.chosen.price);
-      console.log(buy.other.separateTickets ? `分開訂兩張可省 ${money(difference, currency)}` : `訂成一張票要多 ${money(difference, currency)}`);
-    }
+    console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
+    const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
+    if (buy.chosen.separateTickets) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);
+    else console.log(`一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
   } else {
-    console.log(`✈️ [${cityLabel(row.city)} 來回每人 ${money(row.price, currency)}](${buildCardSearchUrl(watch.origin, stay, currency)})（沒選到符合時段的航班）`);
+    console.log(`✈️ [${cityLabel(row.city)} 來回每人 ${money(row.price, currency)}](${buildCardSearchUrl(watch.origin, stay, currency)})\n沒選到符合時段的航班`);
   }
   if (pick) {
     listHotel(1, pick.hotel.name, pick.sites, nights, currency, pick.hotel.nightly);
@@ -520,8 +520,8 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
     console.log([pick.hotel.rating !== null ? `⭐${pick.hotel.rating}` : null, type === '私人房' ? null : type, room?.sizeM2 ? `${room.sizeM2} m²` : null,
       pick.hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
     // Say whether the room was checked on Booking (fits the party, own bathroom, no bunk bed) or not.
-    console.log(room ? '✅ Booking 確認：私人衛浴、住得下' : '房型未經 Booking 確認');
-    console.log(`每晚含稅 ${money(nightly, currency)}${site ? `・[${siteName(site.site)}](${site.url ?? url}) 訂` : ''}`);
+    console.log(room ? '✅ 私人衛浴・住得下（Booking）' : '房型未經 Booking 確認');
+    console.log(`每晚含稅 ${money(nightly, currency)}${site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : ''}`);
   } else {
     console.log('🏨 這幾天沒有符合條件的住宿');
   }
@@ -530,7 +530,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   const stayTotal = nightly * nights * roomsNeeded;
   const total = perFare * travelers + stayTotal;
   const each = Math.round(total / travelers);
-  console.log(travelers > 1 ? `${travelers} 人總共約 ${money(total, currency)}・每人 ${money(each, currency)}` : `總共約 ${money(total, currency)}`);
+  console.log(travelers > 1 ? `${travelers} 人總共約 ${money(total, currency)}\n每人${money(each, currency)}` : `總共約 ${money(total, currency)}`);
   if (prefs.maxPerPerson !== null && each > prefs.maxPerPerson) console.log(`⚠️ 超過每人預算 ${money(each - prefs.maxPerPerson, currency)}`);
   beginSegment();
 }
@@ -601,8 +601,8 @@ async function tripSearch(cityArg: string | undefined, outboundDate: string | un
   console.log(`\n${flightLines(found.flights, currency, FLIGHTS_IN_TRIP).join('\n')}`);
   const cheapest = found.flights[0]!;
   writeFileSync(LAST_TRIP_FILE, `${JSON.stringify({ origin, currency, country, city, outboundDate, returnDate, price: cheapest.price, stops: cheapest.stops }, null, 2)}\n`);
-  console.log(`\n[在 Google Flights 看全部航班、訂票](${buildCardSearchUrl(origin, { city, outboundDate, returnDate }, currency)})`);
-  console.log(travelers > 1 ? `每人來回價（${travelers} 人同行），行李費另計。` : '1 人來回價，行李費另計。');
+  console.log(`\n[在 Google Flights 看全部航班](${buildCardSearchUrl(origin, { city, outboundDate, returnDate }, currency)})`);
+  console.log(travelers > 1 ? `每人來回價（${travelers} 人同行）・行李另計` : '1 人來回價・行李另計');
   keyboard = [[`🏨 ${DATED_TRIP_CODE} 這趟的住宿`], [`🔔 ${DATED_TRIP_CODE} 降價通知我`], [FLIGHT_LIST_BUTTON]];
 }
 
@@ -690,7 +690,7 @@ async function roomsFor(which: string | undefined) {
     // Bunk beds decide the type over the name ("Superior Twin Room" with "1 bunk bed").
     const bunk = room.beds.some(bed => /bunk/i.test(bed)) || room.bunkInPhotos;
     const type = room.guests === 1 ? '單人房' : bunk ? '上下鋪房' : named === '私人房' && byBeds ? byBeds : named;
-    console.log(`🛏 *${type}*（${room.name}）`);
+    console.log(`🛏 *${type}*\n${room.name}`);
     if (facts.length) console.log(facts.join('・'));
     // The hotel's own photos outrank its bed list: say so when they disagree.
     if (room.bunkInPhotos && !room.beds.some(bed => /bunk/i.test(bed))) console.log('⚠️ 照片是上下鋪（一張床在上層，要爬梯子）');
@@ -701,7 +701,7 @@ async function roomsFor(which: string | undefined) {
     else if (!room.photos.length) console.log(`（${source} 沒有這個房型的房間照）`);
   }
   beginSegment();
-  console.log(`[在 ${source} 看這間、訂房](${result.hotelUrl})\n價格是 ${source} 顯示的含稅總價，可能和 Google 比價略有不同。`);
+  console.log(`[在 ${source} 看這間、訂房](${result.hotelUrl})\n價格是 ${source} 含稅總價`);
 }
 
 /**
@@ -996,7 +996,7 @@ function setPrefs(key: string | undefined, value: string | undefined) {
     writeFileSync(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
   }
   const prefs = readPrefs(settings.prefs);
-  console.log(['你的偏好', `出發時間 ${prefs.departAfter}–${prefs.departBefore}`, `托運行李：${prefs.checkedBag ? `要（廉航加估算 ${money(prefs.bagFeeEstimate, 'TWD')}）` : '不用'}`,
+  console.log(['你的偏好', `出發時間 ${prefs.departAfter}–${prefs.departBefore}`, `托運行李：${prefs.checkedBag ? `要（廉航加 ${money(prefs.bagFeeEstimate, 'TWD')}）` : '不用'}`,
     `飯店 ${prefs.minStars} 星以上、評分 ${prefs.minRating} 以上`, `每人預算：${prefs.maxPerPerson === null ? '不限' : money(prefs.maxPerPerson, 'TWD')}`,
     prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂'].join('\n'));
 }
