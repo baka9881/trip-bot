@@ -17,7 +17,7 @@ import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from 
 import { buildHotelNameUrl, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import type { FlightOption } from './deals/flight-list';
-import { chooseBookingOption, chooseFlight, chooseReturn, departsInWindow, readPrefs, type Prefs } from './prefs';
+import { atHotel, chooseBookingOption, chooseFlight, chooseReturn, clock, fitsCheckIn, fitsCheckOut, leavesHotel, readPrefs, type Prefs } from './prefs';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
 import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
@@ -181,7 +181,7 @@ const NEARBY_PER_AREA = 2;
 const GOOD_RATING = 3.5;
 
 type Stay = { city: string; outboundDate: string; returnDate: string };
-type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos };
+type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos; warning?: string };
 const isGood = (hotel: { rating: number | null }) => hotel.rating !== null && hotel.rating >= GOOD_RATING;
 
 /**
@@ -272,7 +272,7 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
 function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPrice: number, currency: string, country: string, start = 1) {
   // The user's format (2026-10-18): name, photos, rating and room type, the nightly price at the one
   // recommended site with its link, then the totals. No cancellation terms, labels or room price gaps.
-  picks.forEach(({ hotel, nightly: listNightly, note, sites, photos }, index) => {
+  picks.forEach(({ hotel, nightly: listNightly, note, sites, photos, warning }, index) => {
     // One price: what the linked site charges, but never under the pick's own price, which may be
     // for a bigger room than the site's cheapest offer (a room for two rather than a single); the
     // link then goes to a site asking about that price.
@@ -290,6 +290,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     // "私人房" only means the site named no type; it says nothing, so leave it out.
     const type = note.replace(/^✅ /, '');
     console.log([hotel.rating !== null ? `⭐${hotel.rating}` : null, type === '私人房' ? null : type, hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
+    if (warning) console.log(warning);
     const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : '';
     console.log(`每晚含稅 ${money(nightly, currency)}${booking}${saving > 0 ? `\n🏷 比平常省 ${money(saving, currency)}／晚` : ''}`);
     if (travelers === 1) console.log(`${nights}晚 ${money(cost.stay, currency)}・含機票 ${money(cost.total, currency)}`);
@@ -340,15 +341,11 @@ async function resolveOption(code: string | undefined): Promise<TripOption> {
 const nightsOf = (stay: { outboundDate: string; returnDate: string }) =>
   Math.round((Date.parse(`${stay.returnDate}T00:00:00Z`) - Date.parse(`${stay.outboundDate}T00:00:00Z`)) / 86_400_000);
 
-const FLIGHTS_IN_HOTEL_LIST = 3;
-
-const OTHER_HOTELS_BUTTON = '其他住宿';
-
 /** Hotels the user's preferences allow (class and rating); unrated hotels pass the rating test. */
 const fitsPrefs = (pick: Pick, prefs: Prefs) =>
   (pick.hotel.stars ?? 0) >= prefs.minStars && (pick.hotel.rating === null || pick.hotel.rating >= prefs.minRating);
 
-async function hotelsFor(code: string | undefined, nearby = false, all = false) {
+async function hotelsFor(code: string | undefined, nearby = false) {
   const { watch, row, label } = await resolveOption(code);
   const stay: Stay = { city: row.city, outboundDate: row.outboundDate, returnDate: row.returnDate };
   const nights = nightsOf(row);
@@ -358,7 +355,6 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
   const watchButton = `🔔 ${code!.toUpperCase()} 降價通知我`;
   keyboard = !nearby && nearbyAreas(row.city).length
     ? [[`${code!.toUpperCase()} ${NEARBY_BUTTON}`], [watchButton], [FLIGHT_LIST_BUTTON]] : [[watchButton], [FLIGHT_LIST_BUTTON]];
-  if (!nearby && !all) return recommendCombo(code!.toUpperCase(), watch, row, stay, nights, watchButton);
 
   if (nearby) {
     const areas = nearbyAreas(row.city);
@@ -379,24 +375,13 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
     return;
   }
 
-  console.log(`🏨 *${cityLabel(row.city)} 住宿*\n${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚\n${flightLine}`);
-  // Google's flight page (verdict and flights) is fetched alongside the hotel checks, so it adds no wait.
-  // Only Google's verdict is shown: it judges the route's whole price history (the user's choice,
-  // 2026-10-18), where the scanner's own record covers a few weeks.
-  const [result, firstFlights] = await Promise.all([
-    cachedStays(watch, stay, ROOM_CHECK_CANDIDATES, MAX_HOTELS),
-    cachedFlights(watch.origin, stay, row.currency, watch.country).catch(() => null),
-  ]);
-  // The flight page sometimes loads too slowly beside the hotel pages; ask once more on its own.
-  const flights = firstFlights?.market ? firstFlights
-    : await cachedFlights(watch.origin, stay, row.currency, watch.country, true).catch(() => firstFlights);
-  const market = flights?.market ?? null;
-  const amount = market?.versusUsual?.replace(/^(\S+) cheaper$/, '比平常便宜 $1').replace(/^(\S+) more expensive$/, '比平常貴 $1');
-  const verdict = market ? `${MARKET_TEXT[market.level].replace(/（.*）/, '')}${amount ? `\n${amount}` : ''}` : '沒讀到';
-  console.log(`\n📊 機票：Google ${verdict}`);
+  console.log(`🏨 *${cityLabel(row.city)} 住宿*\n${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚`);
   const prefs = readUserPrefs();
-  const inWindow = flights?.flights.filter(flight => departsInWindow(flight.departs, prefs)) ?? [];
-  if (inWindow.length) console.log(`\n✈️ 這幾天的航班\n${flightLines(inWindow, row.currency, FLIGHTS_IN_HOTEL_LIST).join('\n')}`);
+  // The flights are worked out beside the hotel checks, so they add no wait.
+  const [result, perFare] = await Promise.all([
+    cachedStays(watch, stay, ROOM_CHECK_CANDIDATES, MAX_HOTELS),
+    printFlightPlan(watch, row, stay, prefs),
+  ]);
   const allLink = buildHotelNameUrl({ city: row.city, checkIn: row.outboundDate, checkOut: row.returnDate, currency: row.currency, country: watch.country });
   if (!result) {
     console.log('\n這次沒查到這段日期的住宿價格（Google Hotels 可能沒套用日期或暫時擋住了），可以稍後再試。');
@@ -413,7 +398,7 @@ async function hotelsFor(code: string | undefined, nearby = false, all = false) 
   console.log(cheaper.length ? `\n🏷 住宿：${cheaper.length} 間比平常便宜` : '\n🏷 住宿：都是一般價');
   if (!fitting.length) console.log(`沒有評分 ${prefs.minRating} 以上的，先列全部`);
   console.log('');
-  printPicks(await ownBathrooms(shown), stay, nights, row.price, row.currency, watch.country);
+  printPicks(await ownBathrooms(shown), stay, nights, perFare, row.currency, watch.country);
   // Only the link: the user found the explanations under the list noise (2026-10-18). A public bath
   // keeps one short line, since its photos read as a shared bathroom.
   console.log(`\n[看全部住宿](${allLink})`);
@@ -429,8 +414,6 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
   cached('booking', [origin, stay, currency, country, prefs], () => bookFlight(origin, stay, currency, country, {
     outbound: flights => chooseFlight(flights, prefs), inbound: (flights, airline) => chooseReturn(flights, airline, prefs) }));
 
-const COMBO_ROOM_CHECKS = 3;
-
 /**
  * A hotel with a public bath files the bath and its shared washrooms under Google's "Bathroom"
  * (APA Asakusa, 2026-10-19), and the user wants the room's own bathroom: it comes from the hotel's
@@ -439,119 +422,65 @@ const COMBO_ROOM_CHECKS = 3;
 async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
   const result: Pick[] = [];
   for (const pick of picks) {
-    if (!pick.hotel.publicBath || !pick.photos) { result.push(pick); continue; }
     const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
     const bookingUrl = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
     const found = bookingUrl ? await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(() => null) : null;
-    const listed = pick.note.replace(/^[✅❔] /, '');
     const rooms = found?.rooms ?? [];
+    // Google's room names hide bunk beds (Minn Kamata's "Quadruple Room" is bunks, 2026-10-19): the
+    // user picks from the list, so a hotel whose rooms for the party are all bunks says so.
+    const forParty = rooms.filter(room => !isDormBed(room.name) && (room.guests === null || room.guests >= Math.min(travelers, 2)));
+    const bunk = (room: BookingRoom) => room.bunkInPhotos || room.beds.some(bed => /bunk/i.test(bed));
+    const warning = forParty.length && forParty.every(bunk) ? '⚠️ Booking 照片是上下鋪' : undefined;
+    if (!pick.hotel.publicBath || !pick.photos) { result.push({ ...pick, warning }); continue; }
+    const listed = pick.note.replace(/^[✅❔] /, '');
     const bathroom = [...rooms.filter(room => roomType(room.name) === listed), ...rooms].map(room => room.bathroomPhoto).find(Boolean);
-    result.push({ ...pick, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
+    result.push({ ...pick, warning, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
   }
   return result;
 }
 
-/** Whether a Booking room suits the party: fits them, its own bathroom, no bunk or dorm bed. */
-const suitsParty = (room: BookingRoom) => !(readUserPrefs().nonSmoking && isSmokingRoom(room.name)) && !isDormBed(room.name) && room.bathroom !== 'shared' && !room.bunkInPhotos
-  && !room.beds.some(bed => /bunk/i.test(bed)) && (room.guests === null || room.guests >= Math.min(travelers, 2));
-
 /**
- * The hotel to recommend, checked on Booking first: Google's room names hid that DOYANEN HOTELS
- * BAKURO's "twin" is a bunk bed with a shared bathroom (2026-10-19). Up to COMBO_ROOM_CHECKS hotels
- * are opened (one Booking page each, cached); a hotel Booking does not sell is taken unchecked.
+ * The flights to book for an option (the user's request, 2026-10-19: a lazier flow): the pair that
+ * fits their preferences and the hotel's check-in and check-out, cheapest with bag fees counted,
+ * each linked where it is booked. The user picks the hotel from the list that follows (they found
+ * one recommended hotel too poor, 2026-10-19). Returns each person's fare, bag estimate included.
  */
-async function verifiedForCombo(picks: readonly Pick[]): Promise<{ pick: Pick; room: BookingRoom | null; bookingPage?: string } | null> {
-  let checks = 0;
-  for (const pick of picks) {
-    const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
-    const bookingUrl = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
-    if (!bookingUrl) return { pick, room: null };
-    if (checks++ >= COMBO_ROOM_CHECKS) break;
-    const found = await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(error => { console.error('[deals] combo room check failed:', String(error).slice(0, 200)); return null; });
-    if (!found?.rooms.length) return { pick, room: null }; // Booking showed nothing to check against
-    const room = found.rooms.filter(suitsParty).sort((a, b) => (a.stayTotal ?? Infinity) - (b.stayTotal ?? Infinity))[0];
-    if (room) return { pick, room, bookingPage: found.hotelUrl };
-  }
-  return null;
-}
-
-/**
- * One recommended combination instead of lists to compare (the user's request, 2026-10-19): the flight
- * that fits their preferences, cheapest with bag fees counted, linked to its booking page; the best
- * hotel that fits, with its photos and booking link; and what the whole party pays.
- */
-async function recommendCombo(code: string, watch: TripOption['watch'], row: TripOption['row'], stay: Stay, nights: number, watchButton: string) {
-  const prefs = readUserPrefs();
-  const [result, verdictPage, booking] = await Promise.all([
-    cachedStays(watch, stay, ROOM_CHECK_CANDIDATES, MAX_HOTELS),
-    cachedFlights(watch.origin, stay, row.currency, watch.country).catch(() => null),
-    cachedBooking(watch.origin, stay, row.currency, watch.country, prefs).catch(error => { if (isBlocked(error)) throw error; console.error("[deals] flight booking failed:", String(error).slice(0, 300)); return null; }),
-  ]);
+async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'], stay: Stay, prefs: Prefs): Promise<number> {
   const currency = row.currency;
-  console.log(`⭐ *推薦組合*\n${cityLabel(row.city)} ${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚`);
+  const [verdictPage, booking] = await Promise.all([
+    cachedFlights(watch.origin, stay, currency, watch.country).catch(() => null),
+    cachedBooking(watch.origin, stay, currency, watch.country, prefs).catch(error => {
+      if (isBlocked(error)) throw error;
+      console.error('[deals] flight booking failed:', String(error).slice(0, 300));
+      return null;
+    }),
+  ]);
   const market = verdictPage?.market ?? null;
   const amount = market?.versusUsual?.replace(/^(\S+) cheaper$/, '比平常便宜 $1').replace(/^(\S+) more expensive$/, '比平常貴 $1');
   if (market) console.log(`📊 機票 Google ${MARKET_TEXT[market.level].replace(/（.*）/, '')}${amount ? `\n${amount}` : ''}`);
-  keyboard = [[`🏨 ${code} ${OTHER_HOTELS_BUTTON}`], [watchButton], [FLIGHT_LIST_BUTTON]];
-
-  const checked = await verifiedForCombo((result?.picks ?? []).filter(candidate => fitsPrefs(candidate, prefs)));
-  const pick = checked?.pick ?? null;
-  const quoted = pick ? Math.max(recommendedSite(pick.sites)?.nightly ?? 0, pick.nightly) : 0;
-  // The room checked on Booking is bookable at Booking's price for that very room; when that is lower
-  // than the sites' quote (APA Asakusa Kuramae Kita, 2026-10-19: NT$4,107 against Trip.com's NT$4,607),
-  // book it there.
-  const bookingNightly = checked?.room?.stayTotal && checked.bookingPage ? Math.round(checked.room.stayTotal / nights) : null;
-  const onBooking = bookingNightly !== null && bookingNightly < quoted;
-  const nightly = onBooking ? bookingNightly! : quoted;
-  const site = onBooking ? { site: 'Booking.com', nightly, url: checked!.bookingPage! } : pick ? siteForPrice(pick.sites, nightly) : null;
-  // The checked room's own photos on Booking (its views and its bathroom) beat Google's groups,
-  // which mix in public baths and shared washrooms.
-  const roomPhotos = checked?.room?.photos.length ? checked.room.photos : null;
-  beginSegment(roomPhotos ?? (pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, '')) : []), true);
-
   const buy = booking ? chooseBookingOption(booking.options, prefs.oneTicketPremium) : null;
-  if (booking && buy) {
-    const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
-    const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
-    // Separate tickets are two bookings: each leg links its airline's own page (2026-10-19, the user
-    // got one link for two tickets); otherwise Google's booking page for the whole trip.
-    const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
-    if (buy.chosen.separateTickets) {
-      console.log(`✈️ [去 ${legs(booking.outbound)}](${legLink(booking.legLinks?.outbound)})\n[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})`);
-    } else {
-      console.log(`✈️ [去 ${legs(booking.outbound)}](${booking.url})\n回 ${legs(booking.inbound)}`);
-    }
-    console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
-    const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
-    if (buy.chosen.separateTickets) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);
-    else console.log(`一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
-  } else {
+  if (!booking || !buy) {
     console.log(`✈️ [${cityLabel(row.city)} 來回每人 ${money(row.price, currency)}](${buildCardSearchUrl(watch.origin, stay, currency)})\n沒選到符合時段的航班`);
+    return row.price;
   }
-  if (pick) {
-    listHotel(1, pick.hotel.name, pick.sites, nights, currency, pick.hotel.nightly);
-    const url = buildHotelNameUrl({ name: pick.hotel.name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate, currency, country: watch.country });
-    // The room Booking confirmed, with its size, when there is one; else the type Google's panel gave.
-    const room = checked?.room ?? null;
-    const type = room ? roomType(room.name) : pick.note.replace(/^✅ /, '');
-    console.log(`🏨 [${pick.hotel.name}](${url})`);
-    console.log([pick.hotel.rating !== null ? `⭐${pick.hotel.rating}` : null, type === '私人房' ? null : type, room?.sizeM2 ? `${room.sizeM2} m²` : null,
-      pick.hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
-    // Say whether the room was checked on Booking (fits the party, own bathroom, no bunk bed) or not.
-    console.log(room ? '✅ 私人衛浴・住得下（Booking）' : '房型未經 Booking 確認');
-    if (prefs.nonSmoking) console.log(room && isNonSmokingRoom(room.name) ? '🚭 禁菸房' : '🚭 沒寫是否禁菸，訂房時選禁菸');
-    console.log(`每晚含稅 ${money(nightly, currency)}${site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : ''}`);
-  } else {
-    console.log('🏨 這幾天沒有符合條件的住宿');
-  }
-  // What the whole party pays: every fare (with the bag estimate when it applies) and every room.
-  const perFare = (buy?.chosen.price ?? row.price) + (booking && buy && prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost) ? prefs.bagFeeEstimate : 0);
-  const stayTotal = nightly * nights * roomsNeeded;
-  const total = perFare * travelers + stayTotal;
-  const each = Math.round(total / travelers);
-  console.log(travelers > 1 ? `${travelers} 人總共約 ${money(total, currency)}\n每人 ${money(each, currency)}` : `總共約 ${money(total, currency)}`);
-  if (prefs.maxPerPerson !== null && each > prefs.maxPerPerson) console.log(`⚠️ 超過每人預算 ${money(each - prefs.maxPerPerson, currency)}`);
-  beginSegment();
+  const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
+  // Separate tickets are two bookings: each leg links its airline's own page (2026-10-19, the user
+  // got one link for two tickets); otherwise Google's booking page for the whole trip.
+  const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
+  const separate = buy.chosen.separateTickets;
+  // When the party reaches the hotel and must leave it, against its usual check-in and check-out.
+  const arrival = atHotel(booking.outbound);
+  const leave = leavesHotel(booking.inbound);
+  console.log(`✈️ [去 ${legs(booking.outbound)}](${separate ? legLink(booking.legLinks?.outbound) : booking.url})`);
+  console.log(`${fitsCheckIn(booking.outbound) ? '' : '⚠️ '}約 ${clock(arrival)} 到飯店・${prefs.hotelCheckIn} 起入住`);
+  console.log(separate ? `[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})` : `回 ${legs(booking.inbound)}`);
+  console.log(`${fitsCheckOut(booking.inbound, prefs) ? '' : '⚠️ '}${clock(leave)} 離開飯店・${prefs.hotelCheckOut} 退房`);
+  const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
+  console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
+  const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
+  if (separate) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);
+  else console.log(`一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
+  return buy.chosen.price + (bagged ? prefs.bagFeeEstimate : 0);
 }
 
 function regions() {
@@ -1001,7 +930,7 @@ function audit() {
 const PREF_NAMES: Record<keyof Prefs, string> = {
   departAfter: '最早出發', departBefore: '最晚出發', checkedBag: '托運行李', bagFeeEstimate: '廉航行李費估算（每人來回）',
   minStars: '最低星級', minRating: '最低評分', maxPerPerson: '每人預算上限', oneTicketPremium: '一張票最多可以貴多少',
-  nonSmoking: '只要禁菸房',
+  nonSmoking: '只要禁菸房', hotelCheckIn: '飯店入住時間', hotelCheckOut: '飯店退房時間',
 };
 
 /** Show the preferences, or set one: `prefs minRating 4.2`, `prefs checkedBag false`, `prefs maxPerPerson none`. */
@@ -1013,7 +942,7 @@ function setPrefs(key: string | undefined, value: string | undefined) {
     const parsed = value === 'none' ? null : value === 'true' ? true : value === 'false' ? false : /^\d+(\.\d+)?$/.test(value ?? '') ? Number(value) : value;
     const next = readPrefs({ ...(settings.prefs as object | undefined), [key]: parsed });
     if (JSON.stringify(next[key as keyof Prefs]) !== JSON.stringify(parsed)) throw new Error(`${PREF_NAMES[key as keyof Prefs]} 的值不合理：${value}`);
-    settings.prefs = next;
+    settings.prefs = { ...(settings.prefs as object | undefined), [key]: next[key as keyof Prefs] }; // only what the user set: defaults stay changeable
     writeFileSync(SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
   }
   const prefs = readPrefs(settings.prefs);
@@ -1052,7 +981,7 @@ try {
   else if (command === 'travelers') setTravelers(args[0]);
   else if (command === 'prefs') setPrefs(args[0], args[1]);
   else if (command === 'hotels-for') {
-    await hotelsFor(args[0], args.includes('--nearby'), args.includes('--all'));
+    await hotelsFor(args[0], args.includes('--nearby')); // --all is the default now
     saveListedHotels();
   } else if (command === 'rooms') await roomsFor(args[0]);
   else if (command === 'trip') await tripSearch(args[0], args[1], args[2]);

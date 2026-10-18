@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chooseBookingOption, chooseFlight, chooseReturn, comparableFare, DEFAULT_PREFS, departsInWindow, readPrefs } from './prefs';
+import { atHotel, chooseBookingOption, chooseFlight, chooseReturn, clock, comparableFare, DEFAULT_PREFS, departsInWindow, fitsCheckOut, leavesHotel, readPrefs } from './prefs';
 import type { FlightOption } from './deals/flight-list';
 
 const flight = (airline: string, price: number, departs: string, lowCost = false): FlightOption =>
@@ -36,6 +36,20 @@ describe('preferences', () => {
     const tie = [{ separateTickets: true, price: 9856 }, { separateTickets: false, price: 9856 }];
     expect(chooseBookingOption(tie, 0)?.chosen.separateTickets).toBe(false);
     expect(chooseBookingOption([], 0)).toBeNull();
+  });
+
+  // Tokyo, Oct 29–Nov 4 (2026-10-19): Jetstar 08:30 meant leaving the hotel at 05:00.
+  it('chooses flights around the hotel\'s check-in and check-out', () => {
+    const early = flight('Jetstar', 3500, '08:30', true);
+    const noon = flight('Scoot', 3900, '12:10', true);
+    expect(chooseReturn([early, noon], 'Scoot', DEFAULT_PREFS)?.departs).toBe('12:10');
+    expect(chooseReturn([early], 'Scoot', DEFAULT_PREFS)?.departs).toBe('08:30'); // nothing better: still a flight
+    const late = { ...flight('Peach', 5000, '19:00', true), arrives: '23:20' };
+    const evening = { ...flight('Scoot', 5300, '14:25', true), arrives: '18:30' };
+    expect(chooseFlight([late, evening], DEFAULT_PREFS)?.airline).toBe('Scoot');
+    expect(clock(atHotel(evening))).toBe('21:00');
+    expect(clock(leavesHotel(noon))).toBe('08:40');
+    expect(fitsCheckOut(early, DEFAULT_PREFS)).toBe(false);
   });
 
   it('pairs the cheapest return, the same airline only within the one-ticket premium', () => {
