@@ -23,7 +23,7 @@ import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './dea
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
-import { airlineName, bedText, flightLines, withAdults, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
+import { airlineName, bedText, flightLines, shortDuration, withAdults, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { auditFlights, auditStays, type AuditPick } from './audit';
 import { createHash } from 'node:crypto';
@@ -463,7 +463,9 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
     console.log(`✈️ [${cityLabel(row.city)} 來回每人 ${money(row.price, currency)}](${buildCardSearchUrl(watch.origin, stay, currency)})\n沒選到符合時段的航班`);
     return row.price;
   }
-  const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
+  // Times are local (Japan is an hour ahead of Taiwan), so the time in the air goes with them:
+  // 14:25→18:30 read as four hours to the user (2026-10-19).
+  const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}・飛 ${shortDuration(flight.duration)}`;
   // Separate tickets are two bookings: each leg links its airline's own page (2026-10-19, the user
   // got one link for two tickets); otherwise Google's booking page for the whole trip.
   const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;

@@ -120,10 +120,13 @@ export function pickFlights(flights: readonly FlightOption[], limit: number): Fl
  *   1. 樂桃 NT$11,137・廉航
  *   18:50→22:20・直飛・2h30
  */
+/** Google's "3 hr 5 min" as "3h05": the time in the air, since departure and arrival are local times. */
+export const shortDuration = (duration: string) => duration.replace(/ hr ?/, 'h').replace(/ min/, '').replace(/h(\d)$/, 'h0$1');
+
 export function flightLines(flights: readonly FlightOption[], currency: string, limit = 5): string[] {
   return pickFlights(flights, limit).map((flight, index) => {
     const tags = [flight.lowCost ? '廉航' : null].filter(Boolean);
-    const duration = flight.duration.replace(/ hr ?/, 'h').replace(/ min/, '').replace(/h(\d)$/, 'h0$1');
+    const duration = shortDuration(flight.duration);
     return `${index + 1}. ${airlineName(flight.airline)} ${money(flight.price, currency)}${tags.length ? `・${tags.join('・')}` : ''}`
       + `\n${flight.departs}→${flight.arrives}・${flight.stops === 0 ? '直飛' : `轉機 ${flight.stops} 次`}・${duration}`;
   });
