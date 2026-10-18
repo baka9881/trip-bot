@@ -22,7 +22,8 @@ import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
 import { bedText, flightLines, listPhoto, money, recommendedSite, roomType, siteName } from './format';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { auditFlights, auditStays, type AuditPick } from './audit';
 import { createHash } from 'node:crypto';
 
 /** Telegram buttons for the output; each label comes back as the user's message when tapped. */
@@ -237,7 +238,18 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     // there), else Google's "from" price; a hotel known to sell dorm beds too is priced no lower than
     // its cheapest private room.
     const quoted = recommendedSite(sites.get(hotel.name) ?? [])?.nightly ?? hotel.nightly;
-    return check?.status === 'private' ? [{ hotel, room: check.room, nightly: check.alsoShared ? Math.max(check.room.nightly, quoted) : quoted }] : [];
+    if (check?.status !== 'private') return [];
+    // Two or more travellers need a room for two: skip single rooms, and price no lower than the
+    // cheapest room that fits (2026-10-18: three lists offered a single room to two people, priced
+    // as one). A hotel with only singles is left out.
+    if (travelers >= 2) {
+      // A room with its own bathroom first; a shared-bathroom room only when the hotel has nothing else.
+      const fits = check.options.filter(option => roomType(option.name) !== '單人房');
+      const forTwo = fits.find(option => !/共用衛浴/.test(roomType(option.name))) ?? fits[0];
+      if (!forTwo) return [];
+      return [{ hotel, room: forTwo, nightly: Math.max(forTwo.nightly, quoted) }];
+    }
+    return [{ hotel, room: check.room, nightly: check.alsoShared ? Math.max(check.room.nightly, quoted) : quoted }];
   }).sort((a, b) => Number(!isGood(a.hotel)) - Number(!isGood(b.hotel)) || a.nightly - b.nightly);
   const unconfirmed = rated.filter(hotel => checks.get(hotel.name)?.status === 'unknown');
   const picks: Pick[] = [
@@ -253,7 +265,9 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
   // recommended site with its link, then the totals. No cancellation terms, labels or room price gaps.
   picks.forEach(({ hotel, nightly: listNightly, note, sites, photos }, index) => {
     const site = recommendedSite(sites);
-    const nightly = site?.nightly ?? listNightly; // one price: what the linked site charges
+    // One price: what the linked site charges, but never under the pick's own price, which may be
+    // for a bigger room than the site's cheapest offer (a room for two rather than a single).
+    const nightly = Math.max(site?.nightly ?? 0, listNightly);
     const cost = partyCost(flightPrice, nightly, nights);
     const url = buildHotelNameUrl({ name: hotel.name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate, currency, country });
     // Google states "N% less than usual" for the list price; show it as money per night.
@@ -762,6 +776,10 @@ async function selfCheck(): Promise<string[]> {
   if (picks.length && withSites < picks.length / 2) problems.push(`只有 ${withSites}/${picks.length} 間有訂房網站`);
   if (!flights?.flights.length) problems.push('讀不到航班清單');
   else if (!flights.market) problems.push('讀不到 Google 的機票價格判斷');
+  // The data check over every cached list: report what would mislead (wrong room for the party,
+  // implausible or inconsistent prices, missing photos), not notes such as a hotel without a site link.
+  const NOTES = /沒有任何訂房網站價格|共用衛浴/;
+  problems.push(...auditCache().filter(problem => !NOTES.test(problem)).slice(0, 8));
   return problems;
 }
 
@@ -792,6 +810,33 @@ async function tick() {
   }
   pruneObservations(new Date(Date.now() - OBSERVATION_DAYS * 86_400_000));
   await runJobs();
+}
+
+/**
+ * Every result cached in the last six hours, checked against the mistakes the user once found
+ * (src/audit.ts). Returns one line per problem, prefixed with the stay it belongs to.
+ */
+function auditCache(): string[] {
+  const problems: string[] = [];
+  let files: string[] = [];
+  try { files = readdirSync(CACHE_DIR); } catch { return problems; }
+  for (const file of files) {
+    let saved: { savedAt: string; key: unknown[]; value: unknown };
+    try { saved = JSON.parse(readFileSync(new URL(file, CACHE_DIR), 'utf8')); } catch { continue; }
+    if (Date.now() - Date.parse(saved.savedAt) > CACHE_HOURS * 3_600_000) continue;
+    const stay = (file.startsWith('stays-') ? saved.key[0] : saved.key[1]) as Stay | undefined;
+    const label = stay ? `${cityLabel(stay.city)} ${md(stay.outboundDate)}–${md(stay.returnDate)}` : file;
+    const found = file.startsWith('stays-')
+      ? auditStays((saved.value as { picks: AuditPick[] } | null)?.picks ?? [], travelers)
+      : auditFlights(saved.value as Parameters<typeof auditFlights>[0]);
+    problems.push(...found.map(problem => `${label}｜${problem}`));
+  }
+  return problems;
+}
+
+function audit() {
+  const problems = auditCache();
+  console.log(problems.length ? problems.join('\n') : '快取裡的清單都沒有發現問題。');
 }
 
 function setTravelers(value: string | undefined) {
@@ -830,6 +875,7 @@ try {
   else if (command === 'unwatch') unwatch(args[0]);
   else if (command === 'jobs') await runJobs();
   else if (command === 'tick') await tick();
+  else if (command === 'audit') audit();
   else throw new Error('指令：report、trip、hotels-for、rooms、watch、watch-hotel、watches、unwatch、travelers、regions、add-region、remove-region、scan-now、jobs');
   if (toTelegram && segments.some(segment => segment.text)) {
     console.log = print;
