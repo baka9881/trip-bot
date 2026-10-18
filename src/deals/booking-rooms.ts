@@ -49,7 +49,7 @@ export function parseRoomRow(text: string): Pick<BookingRoom, 'guests' | 'stayTo
 /** Size, beds and bathroom from the room's cell in the table ("11 m²") or its details dialog ("Room size 11 m²"). */
 export function parseRoomFacts(text: string): Pick<BookingRoom, 'sizeM2' | 'beds' | 'bathroom'> {
   const size = /(?:Room size\s*)?(\d+)\s*m²/i.exec(text);
-  const beds = [...text.matchAll(/\b(\d+)\s+(?:extra-large |large )?(double|single|twin|queen|king|sofa|bunk|futon)[a-z ]*?beds?\b/gi)]
+  const beds = [...text.matchAll(/\b(\d+)\s+(?:extra-large |large |small )?(double|single|twin|queen|king|sofa|bunk|futon)[a-z ]*?beds?\b/gi)]
     .map(match => match[0].replace(/\s+/g, ' ').trim());
   const bathroom = /Private bathroom/i.test(text) ? 'private' : /Shared bathroom|Shared toilet/i.test(text) ? 'shared' : null;
   return { sizeM2: size ? Number(size[1]) : null, beds: [...new Set(beds)], bathroom };

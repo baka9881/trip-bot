@@ -18,6 +18,7 @@ import { buildHotelNameUrl, isPrivateHotel, nearbyAreas, type HotelListQuote, ty
 import { captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
 import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
+import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
 import { bedText, flightLines, listPhoto, money, recommendedSite, roomType, siteName } from './format';
@@ -460,7 +461,7 @@ async function tripSearch(cityArg: string | undefined, outboundDate: string | un
  * its Booking.com page (from Google's price link) when Booking sold it.
  */
 const LAST_HOTELS_FILE = new URL('../data/last-hotels.json', import.meta.url);
-type ListedHotel = { n: number; name: string; bookingUrl: string | null; nightly?: number };
+type ListedHotel = { n: number; name: string; bookingUrl: string | null; tripHotelId?: string | null; nightly?: number };
 const listedHotels: ListedHotel[] = [];
 let listedStay: { nights: number; currency: string } | null = null;
 /** The stay of the last hotel list, so a hotel from it can be watched for price drops. */
@@ -468,17 +469,19 @@ let lastStayFor: (Stay & { currency: string; country: string; origin: string }) 
 
 function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number) {
   const booking = sites.find(site => /^booking/i.test(site.site) && site.url);
-  listedHotels.push({ n, name, bookingUrl: booking?.url ? bookingUrlFromGoogle(booking.url) : null, nightly });
+  const trip = sites.find(site => /^trip\.com/i.test(site.site) && site.url);
+  listedHotels.push({ n, name, bookingUrl: booking?.url ? bookingUrlFromGoogle(booking.url) : null,
+    tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly });
   listedStay = { nights, currency };
 }
 
 const ROOM_PHOTO_BUTTON = (n: number) => `📷 第${n}間房型`;
 
-/** Remember the list and offer a room-photo button for each hotel Booking.com sells. */
+/** Remember the list and offer a room-photo button for each hotel Booking.com or Trip.com sells. */
 function saveListedHotels() {
   if (!listedHotels.length) return;
   writeFileSync(LAST_HOTELS_FILE, `${JSON.stringify({ savedAt: new Date().toISOString(), stay: listedStay, trip: lastStayFor, hotels: listedHotels }, null, 2)}\n`);
-  const buttons = listedHotels.filter(hotel => hotel.bookingUrl).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
+  const buttons = listedHotels.filter(hotel => hotel.bookingUrl || hotel.tripHotelId).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
   const rows: string[][] = [];
   for (let start = 0; start < buttons.length; start += BUTTONS_PER_ROW) rows.push(buttons.slice(start, start + BUTTONS_PER_ROW));
   keyboard = [...rows, ...keyboard];
@@ -487,20 +490,36 @@ function saveListedHotels() {
 /** One message per room type of a hotel from the last list: its photos, size, beds, bathroom, guests and price. */
 async function roomsFor(which: string | undefined) {
   const n = Number(/\d+/.exec(which ?? '')?.[0]);
-  let saved: { stay: { nights: number; currency: string } | null; hotels: ListedHotel[] };
+  let saved: { stay: { nights: number; currency: string } | null; trip: Stay | null; hotels: ListedHotel[] };
   try { saved = JSON.parse(readFileSync(LAST_HOTELS_FILE, 'utf8')); } catch { throw new Error('還沒有住宿清單，請先查一次住宿。'); }
   const hotel = saved.hotels.find(entry => entry.n === n);
   if (!hotel) throw new Error(`上一份住宿清單沒有第 ${which} 間。`);
   keyboard = [[`🔔 第${n}間降價通知`], [FLIGHT_LIST_BUTTON]];
-  if (!hotel.bookingUrl) { console.log(`${n}. ${hotel.name} 在 Booking 上沒有賣，點住宿清單裡的訂房網站連結看房型。`); return; }
-  const result = await fetchBookingRooms(hotel.bookingUrl);
-  if (!result?.rooms.length) {
-    console.log(`${n}. ${hotel.name}：Booking 這次沒有顯示房型（可能暫時擋住或已客滿）。\n[直接在 Booking 看這間](${hotel.bookingUrl})`);
-    return;
-  }
   const currency = saved.stay?.currency ?? 'TWD';
   const nights = saved.stay?.nights ?? 1;
-  console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（Booking）`);
+  // Booking first (its photos say which room they show); Trip.com when Booking does not sell the hotel,
+  // shows no rooms, or has no room photos at all. One hotel page per site, only on request.
+  let source = 'Booking';
+  let result = hotel.bookingUrl ? await fetchBookingRooms(hotel.bookingUrl) : null;
+  const usable = (found: typeof result) => Boolean(found?.rooms.some(room => room.photos.length));
+  const state = readJobsState();
+  const tripPaused = state.tripPausedUntil !== null && Date.parse(state.tripPausedUntil) > Date.now();
+  if (!usable(result) && hotel.tripHotelId && saved.trip && !tripPaused) {
+    const fromTrip = await fetchTripRooms(hotel.tripHotelId, saved.trip, currency).catch(error => {
+      // Trip.com asks for a sign-in after a few automated visits: leave it alone for a while.
+      if (error instanceof Error && error.name === 'TripSignInWallError') {
+        writeJobsState({ ...readJobsState(), tripPausedUntil: new Date(Date.now() + TRIP_PAUSE_HOURS * 3_600_000).toISOString() });
+      }
+      return null;
+    });
+    if (fromTrip?.rooms.length && (usable(fromTrip) || !result?.rooms.length)) { result = fromTrip; source = 'Trip.com'; }
+  }
+  if (!result?.rooms.length) {
+    const link = hotel.bookingUrl ? `\n[直接在 Booking 看這間](${hotel.bookingUrl})` : '';
+    console.log(`${n}. ${hotel.name}：Booking 和 Trip.com 這次都沒有顯示房型（可能暫時擋住或已客滿）。${link}`);
+    return;
+  }
+  console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（${source}）`);
   let previousPhotos = '';
   for (const room of result.rooms) {
     const samePhotos = room.photos.length > 0 && room.photos.join() === previousPhotos;
@@ -510,8 +529,9 @@ async function roomsFor(which: string | undefined) {
       room.bathroom === 'private' ? '私人衛浴' : room.bathroom === 'shared' ? '共用衛浴' : null].filter(Boolean);
     // Booking says who a room is for ("Standard Room (for 1 Adult)"); a one-guest room is a single whatever its name.
     // A name like "Standard Room (for 2 Adults)" says no type; the beds do.
-    const byBeds = room.beds.some(bed => /\b(double|queen|king)\b/i.test(bed)) ? '雙人房'
-      : room.beds.some(bed => /^[2-9]\s+(single|twin)/i.test(bed)) ? '雙床房' : null;
+    // Two or more beds of any size ("2 small double beds") is a twin; one big bed a double.
+    const bedCount = room.beds.reduce((sum, bed) => sum + Number(/^\d+/.exec(bed)?.[0] ?? 1), 0);
+    const byBeds = bedCount >= 2 ? '雙床房' : room.beds.some(bed => /\b(double|queen|king)\b/i.test(bed)) ? '雙人房' : null;
     const named = roomType(room.name);
     // Bunk beds decide the type over the name ("Superior Twin Room" with "1 bunk bed").
     const bunk = room.beds.some(bed => /bunk/i.test(bed)) || room.bunkInPhotos;
@@ -524,10 +544,10 @@ async function roomsFor(which: string | undefined) {
     if (room.stayTotal !== null) console.log(`${nights} 晚 ${money(room.stayTotal, currency)}（每晚 ${money(Math.round(room.stayTotal / nights), currency)}）`);
     if (samePhotos) console.log('（照片和上一個房型相同）');
     else if (room.resale) console.log('（第三方轉售方案，Booking 沒有這個方案的房間照）');
-    else if (!room.photos.length) console.log('（Booking 沒有這個房型的房間照）');
+    else if (!room.photos.length) console.log(`（${source} 沒有這個房型的房間照）`);
   }
   beginSegment();
-  console.log(`[在 Booking 看這間、訂房](${result.hotelUrl})\n價格是 Booking 顯示的含稅總價，可能和 Google 比價略有不同。`);
+  console.log(`[在 ${source} 看這間、訂房](${result.hotelUrl})\n價格是 ${source} 顯示的含稅總價，可能和 Google 比價略有不同。`);
 }
 
 /**
@@ -652,13 +672,14 @@ const PREFETCH_PER_LENGTH = 1;
 const PAUSE_BETWEEN_MS = 60_000;
 const WATCH_CHECK_HOURS = 6;
 const BLOCK_COOLDOWN_HOURS = 3;
-type JobsState = { prefetched: Record<string, string>; lastSelfCheck: string | null; lastWatchCheck: string | null; blockedUntil: string | null };
+type JobsState = { prefetched: Record<string, string>; lastSelfCheck: string | null; lastWatchCheck: string | null; blockedUntil: string | null; tripPausedUntil: string | null };
+const TRIP_PAUSE_HOURS = 6;
 
 const isBlocked = (error: unknown) => error instanceof Error && error.name === 'GoogleBlockedError';
 const pause = () => new Promise(resolve => setTimeout(resolve, PAUSE_BETWEEN_MS));
 
 function readJobsState(): JobsState {
-  const empty: JobsState = { prefetched: {}, lastSelfCheck: null, lastWatchCheck: null, blockedUntil: null };
+  const empty: JobsState = { prefetched: {}, lastSelfCheck: null, lastWatchCheck: null, blockedUntil: null, tripPausedUntil: null };
   try { return { ...empty, ...JSON.parse(readFileSync(JOBS_STATE_FILE, 'utf8')) }; } catch { return empty; }
 }
 const writeJobsState = (state: JobsState) => writeFileSync(JOBS_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
