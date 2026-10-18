@@ -420,6 +420,7 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
  * Booking page (cached; one page per such hotel), else the hotel gets no bathroom photo.
  */
 async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
+  const { nonSmoking } = readUserPrefs();
   const result: Pick[] = [];
   for (const pick of picks) {
     const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
@@ -428,12 +429,14 @@ async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
     const rooms = found?.rooms ?? [];
     // Google's room names hide bunk beds (Minn Kamata's "Quadruple Room" is bunks, 2026-10-19): the
     // user picks from the list, so a hotel whose rooms for the party are all bunks says so.
-    const forParty = rooms.filter(room => !isDormBed(room.name) && (room.guests === null || room.guests >= Math.min(travelers, 2)));
+    const fits = rooms.filter(room => !isDormBed(room.name) && (room.guests === null || room.guests >= Math.min(travelers, 2)));
+    const forParty = nonSmoking ? fits.filter(room => !isSmokingRoom(room.name)) : fits;
     const bunk = (room: BookingRoom) => room.bunkInPhotos || room.beds.some(bed => /bunk/i.test(bed));
+    if (fits.length && !forParty.length) continue; // only smoking rooms left: the user wants none
     const warning = forParty.length && forParty.every(bunk) ? '⚠️ Booking 照片是上下鋪' : undefined;
     if (!pick.hotel.publicBath || !pick.photos) { result.push({ ...pick, warning }); continue; }
     const listed = pick.note.replace(/^[✅❔] /, '');
-    const bathroom = [...rooms.filter(room => roomType(room.name) === listed), ...rooms].map(room => room.bathroomPhoto).find(Boolean);
+    const bathroom = [...forParty.filter(room => roomType(room.name) === listed), ...forParty].map(room => room.bathroomPhoto).find(Boolean);
     result.push({ ...pick, warning, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
   }
   return result;
@@ -621,9 +624,12 @@ async function roomsFor(which: string | undefined) {
   }
   // Beds in shared dorms are no room for the user; say the hotel sells them, list only private rooms.
   const dormBeds = result.rooms.filter(room => isDormBed(room.name));
-  const privateRooms = result.rooms.filter(room => !isDormBed(room.name));
+  // Smoking rooms are left out too when the user minds the smell (they were shown one, 2026-10-19).
+  const { nonSmoking } = readUserPrefs();
+  const smoking = nonSmoking ? result.rooms.filter(room => isSmokingRoom(room.name)) : [];
+  const privateRooms = result.rooms.filter(room => !isDormBed(room.name) && !smoking.includes(room));
   console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（${source}）${dormBeds.length ? '\n⚠️ 這間也賣宿舍床位，已排除' : ''}`);
-  if (!privateRooms.length) { console.log('只有宿舍床位，沒有私人房。'); return; }
+  if (!privateRooms.length) { console.log(smoking.length ? '只有吸菸房，沒有禁菸房。' : '只有宿舍床位，沒有私人房。'); return; }
   let previousPhotos = '';
   for (const room of privateRooms) {
     const samePhotos = room.photos.length > 0 && room.photos.join() === previousPhotos;
