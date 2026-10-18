@@ -948,7 +948,7 @@ function setPrefs(key: string | undefined, value: string | undefined) {
   const prefs = readPrefs(settings.prefs);
   console.log(['你的偏好', `出發時間 ${prefs.departAfter}–${prefs.departBefore}`, `托運行李：${prefs.checkedBag ? `要（廉航加 ${money(prefs.bagFeeEstimate, 'TWD')}）` : '不用'}`,
     `飯店 ${prefs.minStars} 星以上、評分 ${prefs.minRating} 以上`, `每人預算：${prefs.maxPerPerson === null ? '不限' : money(prefs.maxPerPerson, 'TWD')}`,
-    prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂', prefs.nonSmoking ? '只要禁菸房' : '吸菸房也可以'].join('\n'));
+    prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂', `飯店 ${prefs.hotelCheckIn} 入住・${prefs.hotelCheckOut} 退房`, prefs.nonSmoking ? '只要禁菸房' : '吸菸房也可以'].join('\n'));
 }
 
 function setTravelers(value: string | undefined) {
