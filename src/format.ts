@@ -51,12 +51,26 @@ export const siteName = (site: string) => site.replace(/\.(com|net|jp|tw)(\.\w{2
 // "アクセスは一時的に制限されています"); never recommended.
 const BLOCKING_SITES = /^traveloka/i;
 
+// A site far below the others is selling something else: Rhodes Kagurazaka Hotel (2026-10-18) was
+// NT$2,176 a night on Booking, two dorm beds, against NT$3,867–4,344 for a room everywhere else.
+const ODDLY_CHEAP = 0.7; // of the other sites' median price
+
+/** Sites (cheapest first) without offers far below what the other sites ask, when there are enough to tell. */
+export function withoutOddlyCheap(sites: readonly SiteOffer[]): SiteOffer[] {
+  if (sites.length < 3) return [...sites];
+  return sites.filter((site, index) => {
+    const others = sites.filter((_, other) => other !== index).map(offer => offer.nightly).sort((a, b) => a - b);
+    const median = others[Math.floor(others.length / 2)]!;
+    return site.nightly >= median * ODDLY_CHEAP;
+  });
+}
+
 /**
  * The one site to book on: the familiar one, unless a lesser-known site is more than
  * WORTH_A_MESSY_SITE a night cheaper (the user's rule, 2026-10-18). Null without site prices.
  */
 export function recommendedSite(allSites: readonly SiteOffer[]): SiteOffer | null {
-  const sites = allSites.filter(site => !BLOCKING_SITES.test(site.site));
+  const sites = withoutOddlyCheap(allSites.filter(site => !BLOCKING_SITES.test(site.site)));
   const cheapest = sites[0];
   if (!cheapest) return null;
   const familiar = sites.find(isFamiliar);

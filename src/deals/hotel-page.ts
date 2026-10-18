@@ -140,6 +140,14 @@ const ROOM_NAME = /room|bed|dorm|suite|twin|double|single|studio|apartment|capsu
 const SHARED_ROOM_TYPE = /dorm|bunk|capsule|cabin|bed in|shared room|mixed|ドミトリー|カプセル|相部屋|床位/i;
 
 /**
+ * A bed sold in a room shared with strangers ("Bunk Bed in Mixed Dormitory Room"). Narrower than
+ * SHARED_ROOM_TYPE: a private room may have a bunk bed ("Superior Twin Room, 1 bunk bed").
+ */
+export function isDormBed(roomName: string): boolean {
+  return /dorm|capsule|bed in|shared room|mixed|ドミトリー|カプセル|相部屋|床位/i.test(roomName);
+}
+
+/**
  * Room offers named in a Google Hotels prices panel ("Featured options").
  * A room is a room-like line followed, past at most two condition lines, by
  * its nightly price; provider rows ("Booking.com", "NT$…") are not room-like.

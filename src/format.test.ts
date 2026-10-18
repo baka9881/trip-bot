@@ -23,6 +23,14 @@ test('a familiar site is recommended unless a lesser-known one saves more than N
   assert.equal(recommendedSite([]), null);
 });
 
+test('an oddly cheap site (dorm beds) is not taken for a room price', () => {
+  // Rhodes Kagurazaka Hotel, 2026-10-18: Booking's NT$2,176 was two dorm beds.
+  const sites = [['Booking.com', 2176], ['Trip.com', 3867], ['Agoda', 4047], ['Priceline', 4056], ['Hotels.com', 4331]]
+    .map(([site, nightly]) => ({ site: site as string, nightly: nightly as number }));
+  assert.equal(recommendedSite(sites)?.site, 'Trip.com');
+  assert.equal(recommendedSite(sites.slice(0, 2))?.site, 'Booking.com'); // too few sites to tell
+});
+
 test('the list shows one room photo (the listed type) and one bathroom photo', () => {
   const photos = { rooms: [{ name: 'Twin Room', url: 'twin' }, { name: 'Double Room', url: 'double' }], bedroom: ['bed'], bathroom: ['bath1', 'bath2'] };
   assert.deepEqual(listPhoto(photos, '雙人房'), ['double', 'bath1']);

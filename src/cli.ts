@@ -14,7 +14,7 @@
 // Add --telegram to send the output to the trip chat with tap-to-send buttons instead of printing it.
 import { CITY_NAMES, cityLabel } from './deals/message';
 import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from './deals/explore-page';
-import { buildHotelNameUrl, isPrivateHotel, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
+import { buildHotelNameUrl, isDormBed, isPrivateHotel, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
 import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
@@ -233,9 +233,11 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
   const shared = rated.filter(hotel => checks.get(hotel.name)?.status === 'shared');
   const verified = rated.flatMap(hotel => {
     const check = checks.get(hotel.name);
-    // Quote the "from" price Google shows on the hotel's link, so the number matches what the user opens;
-    // only a hotel that also sells dorm beds is priced at its cheapest private room instead.
-    return check?.status === 'private' ? [{ hotel, room: check.room, nightly: check.alsoShared ? Math.max(check.room.nightly, hotel.nightly) : hotel.nightly }] : [];
+    // Rank and quote by the recommended site's price (oddly cheap offers such as dorm beds are skipped
+    // there), else Google's "from" price; a hotel known to sell dorm beds too is priced no lower than
+    // its cheapest private room.
+    const quoted = recommendedSite(sites.get(hotel.name) ?? [])?.nightly ?? hotel.nightly;
+    return check?.status === 'private' ? [{ hotel, room: check.room, nightly: check.alsoShared ? Math.max(check.room.nightly, quoted) : quoted }] : [];
   }).sort((a, b) => Number(!isGood(a.hotel)) - Number(!isGood(b.hotel)) || a.nightly - b.nightly);
   const unconfirmed = rated.filter(hotel => checks.get(hotel.name)?.status === 'unknown');
   const picks: Pick[] = [
@@ -515,9 +517,13 @@ async function roomsFor(which: string | undefined) {
     console.log(`${n}. ${hotel.name}：Booking 和 Trip.com 這次都沒有顯示房型（可能暫時擋住或已客滿）。${link}`);
     return;
   }
-  console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（${source}）`);
+  // Beds in shared dorms are no room for the user; say the hotel sells them, list only private rooms.
+  const dormBeds = result.rooms.filter(room => isDormBed(room.name));
+  const privateRooms = result.rooms.filter(room => !isDormBed(room.name));
+  console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（${source}）${dormBeds.length ? '\n⚠️ 這間也賣宿舍床位，已排除' : ''}`);
+  if (!privateRooms.length) { console.log('只有宿舍床位，沒有私人房。'); return; }
   let previousPhotos = '';
-  for (const room of result.rooms) {
+  for (const room of privateRooms) {
     const samePhotos = room.photos.length > 0 && room.photos.join() === previousPhotos;
     beginSegment(samePhotos ? [] : room.photos, true);
     previousPhotos = room.photos.join();

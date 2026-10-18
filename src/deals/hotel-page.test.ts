@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
+import { isDormBed, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
 
 // Excerpt captured from a live Google Hotels search (Okinawa, Nov 1-7 2026, hl=en, curr=TWD).
 const LIVE = `Skip to main content
@@ -367,5 +367,13 @@ describe('bestSiteRating', () => {
     expect(bestSiteRating(text)).toEqual({ site: 'Trip.com', score: 4.7, reviews: 15 });
     expect(bestSiteRating('Trip.com\n4.1/5 · 96 reviews\nAgoda\n4.0/5 · 1,204 reviews')).toEqual({ site: 'Agoda', score: 4, reviews: 1204 });
     expect(bestSiteRating('Reviews\nWrite a review')).toBeNull();
+  });
+});
+
+describe('dorm beds', () => {
+  it('tells a dorm bed from a private room with a bunk bed', () => {
+    expect(isDormBed('Bunk Bed in Mixed Dormitory Room')).toBe(true);
+    expect(isDormBed('Superior Twin Room')).toBe(false);
+    expect(isDormBed('Twin Room with Shared Bathroom')).toBe(false);
   });
 });
