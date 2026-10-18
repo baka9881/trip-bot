@@ -44,6 +44,28 @@ export function parseFlightLabel(label: string): FlightOption | null {
   };
 }
 
+/** One way to buy a chosen itinerary on its Google Flights booking page. */
+export interface BookingOption { seller: string; separateTickets: boolean; price: number }
+
+/**
+ * The booking page's options ("Book with Scoot | Includes NT$237 convenience fee | NT$9,856 |
+ * Continue | … | Book with Scoot | Separate tickets… | NT$8,276 | Continue"): each option's price is
+ * the last amount before its "Continue" (a fee line comes earlier), cheapest first.
+ */
+export function parseBookingOptions(text: string): BookingOption[] {
+  const section = text.slice(text.indexOf('Booking options'), text.indexOf('Prices include') > 0 ? text.indexOf('Prices include') : undefined);
+  const options: BookingOption[] = [];
+  for (const block of section.split(/Book with /).slice(1)) {
+    const beforeContinue = block.split(/Continue/)[0] ?? '';
+    const prices = [...beforeContinue.matchAll(/(?:NT\$|TWD\s?)([\d,]+)/g)].map(match => Number(match[1]!.replace(/,/g, '')));
+    const price = prices.at(-1);
+    if (!price) continue;
+    const seller = (/^([^|\n]+?)(?:Airline|\s*\||\n)/.exec(block)?.[1] ?? '').trim();
+    options.push({ seller, separateTickets: /Separate tickets/i.test(beforeContinue), price });
+  }
+  return options.sort((a, b) => a.price - b.price);
+}
+
 /** Distinct options, cheapest first (the page repeats each result in several labels). */
 export function parseFlightLabels(labels: readonly string[]): FlightOption[] {
   const seen = new Set<string>();

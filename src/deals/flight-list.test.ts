@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFlightLabel, parseFlightLabels } from './flight-list';
+import { parseBookingOptions, parseFlightLabel, parseFlightLabels } from './flight-list';
 
 // Labels from Google Flights, Taipei → Osaka, Dec 20–25 2026.
 const PEACH = 'From 11137 New Taiwan dollars round trip total. Nonstop flight with Peach Aviation. Leaves Taiwan Taoyuan International Airport at 6:50 PM on Sunday, December 20 and arrives at Kansai International Airport at 10:20 PM on Sunday, December 20. Total duration 2 hr 30 min.   Select flight';
@@ -17,6 +17,16 @@ describe('Google Flights results', () => {
     expect(parseFlightLabel(OVERNIGHT)).toMatchObject({ airline: 'ANA', stops: 1, departs: '16:50', arrives: '07:30 +1', lowCost: false });
     expect(parseFlightLabel(JETSTAR)?.lowCost).toBe(true);
     expect(parseFlightLabel('Leaves Taiwan Taoyuan International Airport at 6:50 PM on Sunday, December 20.')).toBeNull();
+  });
+
+  // The booking page of a Scoot round trip, Taipei–Tokyo Oct 29–Nov 2 2026.
+  it('reads each booking option without taking a fee for the price', () => {
+    const page = 'Lowest total price | NT$8,276 | Booking options | How options are ranked | Book with ScootAirline | Includes NT$237 convenience fee | NT$9,856 | Continue | View options | '
+      + 'Book with ScootAirline | Separate ticketsThe 2 tickets in your itinerary must be booked individually | NT$8,276 | Continue | View options | Prices include required taxes + fees for 1 adult.';
+    expect(parseBookingOptions(page)).toEqual([
+      { seller: 'Scoot', separateTickets: true, price: 8276 },
+      { seller: 'Scoot', separateTickets: false, price: 9856 },
+    ]);
   });
 
   it('lists each option once, cheapest first', () => {

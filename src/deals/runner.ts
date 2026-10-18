@@ -7,7 +7,7 @@ import { addAlert, addObservations, claimWatch, dueAlerts, listWatches, observat
   type AlertMessage, type DealWatch } from '../store';
 import { buildExploreUrl, isTripLength, pageTripLength, parseExplorePage, TRIP_LENGTHS, type ExploreQuote } from './explore-page';
 import { cheapestCities, DEFAULT_DEAL_RULES, findDeals, type CityHistory } from './detect';
-import { parseFlightLabels, type FlightOption } from './flight-list';
+import { parseBookingOptions, parseFlightLabel, parseFlightLabels, type BookingOption, type FlightOption } from './flight-list';
 import { bestSiteRating, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels,
   type HotelListQuote, type HotelSummary, type RoomCheck, type SiteOffer, type HotelPhotos } from './hotel-page';
 import { dealMessage, digestMessage, scanFailingMessage, scanRecoveredMessage, type DealContext } from './message';
@@ -149,6 +149,74 @@ export async function searchFlights(origin: string, stay: Pick<ExploreQuote, 'ci
     await context.close();
     const level = parseGoogleMarketLevel(text);
     return { market: level ? { level, versusUsual: parseMarketDifference(text) } : null, flights: parseFlightLabels(labels) };
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+/** A round trip picked on Google Flights down to its booking page: what the user opens to pay. */
+export interface FlightBooking {
+  url: string;
+  outbound: FlightOption;
+  inbound: FlightOption;
+  /** Every way to buy it on the booking page (one ticket from the airline, separate tickets…), cheapest first. */
+  options: BookingOption[];
+}
+
+/**
+ * Pick an outbound and a return on Google Flights (clicking them, as a person would) and return
+ * the booking page they lead to, so the link opens that exact itinerary with its booking options
+ * instead of a search the user has to work through. Null when the page or a choice is missing.
+ */
+export async function bookFlight(origin: string, stay: Pick<ExploreQuote, 'city' | 'outboundDate' | 'returnDate'>, currency: string, country: string,
+  choose: { outbound: (flights: FlightOption[]) => FlightOption | null; inbound: (flights: FlightOption[], outboundAirline: string) => FlightOption | null }):
+  Promise<FlightBooking | null> {
+  const url = new URL('https://www.google.com/travel/flights');
+  url.searchParams.set('q', `flights from ${origin} to ${stay.city} on ${stay.outboundDate} to ${stay.returnDate}`);
+  url.searchParams.set('hl', 'en');
+  url.searchParams.set('curr', currency);
+  url.searchParams.set('gl', country);
+  const browser = await launchBrowser();
+  try {
+    const context = await createStealthContext(browser);
+    const page = await context.newPage();
+    await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await dismissGoogleConsent(page);
+    await assertNotBlocked(page);
+    // Each result is a link whose label describes it; the labels change once a leg is chosen.
+    const readRows = (exclude: readonly string[]) => page.waitForFunction(skip => {
+      const labels = [...document.querySelectorAll('[role=link][aria-label]')].map(element => element.getAttribute('aria-label') ?? '')
+        .filter(label => /round trip total/.test(label));
+      return labels.length && labels.some(label => !skip.includes(label)) ? labels : null;
+    }, exclude, { timeout: 35_000 }).then(handle => handle.jsonValue() as Promise<string[]>, () => [] as string[]);
+    const clickRow = (label: string) => page.evaluate(wanted => {
+      const row = [...document.querySelectorAll('[role=link][aria-label]')].find(element => element.getAttribute('aria-label') === wanted);
+      (row as HTMLElement | undefined)?.click();
+      return Boolean(row);
+    }, label);
+    const pick = (labels: readonly string[], option: FlightOption | null) => labels.find(label => {
+      const parsed = parseFlightLabel(label);
+      return parsed && option && parsed.airline === option.airline && parsed.departs === option.departs && parsed.price === option.price;
+    });
+
+    const outboundLabels = await readRows([]);
+    const outbound = choose.outbound(parseFlightLabels(outboundLabels));
+    const outboundLabel = pick(outboundLabels, outbound);
+    if (!outbound || !outboundLabel || !(await clickRow(outboundLabel))) return null;
+    const returnLabels = await readRows(outboundLabels);
+    const inbound = choose.inbound(parseFlightLabels(returnLabels.filter(label => !outboundLabels.includes(label))), outbound.airline);
+    const inboundLabel = pick(returnLabels, inbound);
+    if (!inbound || !inboundLabel || !(await clickRow(inboundLabel))) return null;
+    const booked = await page.waitForURL(/\/travel\/flights\/booking/, { timeout: 30_000 }).then(() => true, () => false);
+    if (!booked) return null;
+    await page.waitForFunction(() => /Booking options/.test(document.body.innerText), undefined, { timeout: 20_000 }).catch(() => undefined);
+    const text = await page.evaluate(() => document.body.innerText);
+    // Read every option: a page offering one ticket and separate tickets showed a fee line first (2026-10-19).
+    const options = parseBookingOptions(text);
+    const result: FlightBooking = { url: page.url(), outbound, inbound,
+      options: options.length ? options : [{ seller: inbound.airline, separateTickets: false, price: inbound.price }] };
+    await context.close();
+    return result;
   } finally {
     await browser.close().catch(() => undefined);
   }

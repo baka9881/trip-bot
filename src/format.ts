@@ -77,6 +77,19 @@ export function recommendedSite(allSites: readonly SiteOffer[]): SiteOffer | nul
   return familiar && familiar.nightly - cheapest.nightly <= WORTH_A_MESSY_SITE ? familiar : cheapest;
 }
 
+/**
+ * The site to link for a quoted nightly price. When the quote is for a bigger room than the
+ * recommended site's cheapest offer (a room for two, 2026-10-19: NT$5,112 quoted beside Priceline's
+ * NT$3,936 single), link the cheapest site that asks about that much instead, so the link shows the
+ * quoted price; none when no site does.
+ */
+export function siteForPrice(allSites: readonly SiteOffer[], nightly: number): SiteOffer | null {
+  const recommended = recommendedSite(allSites);
+  if (!recommended || recommended.nightly >= nightly * 0.98) return recommended;
+  return withoutOddlyCheap(allSites.filter(site => !BLOCKING_SITES.test(site.site)))
+    .filter(site => site.nightly >= nightly * 0.98).sort((a, b) => a.nightly - b.nightly)[0] ?? null;
+}
+
 const AIRLINE_NAMES: [RegExp, string][] = [
   [/^EVA Air/i, '長榮'], [/^China Airlines/i, '華航'], [/^STARLUX/i, '星宇'], [/^Tigerair Taiwan/i, '台灣虎航'],
   [/^Peach/i, '樂桃'], [/^Jetstar/i, '捷星'], [/^Japan Airlines|^JAL\b/i, '日航'], [/^ANA\b|^All Nippon/i, '全日空'],

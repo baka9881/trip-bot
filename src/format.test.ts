@@ -2,7 +2,7 @@
 // Each case is a mistake that reached the user once, or a rule the user set.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { airlineName, flightLines, listPhoto, pickFlights, recommendedSite, roomType } from './format';
+import { airlineName, flightLines, listPhoto, pickFlights, recommendedSite, roomType, siteForPrice } from './format';
 import { callbackData, chunks } from './telegram';
 import type { FlightOption } from './deals/flight-list';
 
@@ -29,6 +29,15 @@ test('an oddly cheap site (dorm beds) is not taken for a room price', () => {
     .map(([site, nightly]) => ({ site: site as string, nightly: nightly as number }));
   assert.equal(recommendedSite(sites)?.site, 'Trip.com');
   assert.equal(recommendedSite(sites.slice(0, 2))?.site, 'Booking.com'); // too few sites to tell
+});
+
+test('a price for a room for two links a site that asks that price', () => {
+  // APA Hotel Asakusa Tawaramachi-Ekimae, 2026-10-19: the double was NT$5,112, Priceline's NT$3,936 a single.
+  const sites = [['Priceline', 3936], ['KAYAK', 4302], ['Agoda', 4632], ['Trip.com', 5112], ['Booking.com', 5119]]
+    .map(([site, nightly]) => ({ site: site as string, nightly: nightly as number }));
+  assert.equal(siteForPrice(sites, 3936)?.site, 'Priceline');
+  assert.equal(siteForPrice(sites, 5112)?.site, 'Trip.com');
+  assert.equal(siteForPrice(sites, 9000), null);
 });
 
 test('the list shows one room photo (the listed type) and one bathroom photo', () => {
