@@ -161,6 +161,11 @@ export interface FlightBooking {
   inbound: FlightOption;
   /** Every way to buy it on the booking page (one ticket from the airline, separate tickets…), cheapest first. */
   options: BookingOption[];
+  /**
+   * For separate tickets, each ticket's own booking page on the airline's site (Google's "Purchase
+   * separate tickets" dialog), so the user has a link per ticket; null when Google gave none.
+   */
+  legLinks?: { outbound: string | null; inbound: string | null };
 }
 
 /**
@@ -213,13 +218,51 @@ export async function bookFlight(origin: string, stay: Pick<ExploreQuote, 'city'
     const text = await page.evaluate(() => document.body.innerText);
     // Read every option: a page offering one ticket and separate tickets showed a fee line first (2026-10-19).
     const options = parseBookingOptions(text);
-    const result: FlightBooking = { url: page.url(), outbound, inbound,
+    const bookingUrl = page.url();
+    const legLinks = options.some(option => option.separateTickets) ? await separateTicketLinks(page) : undefined;
+    const result: FlightBooking = { url: bookingUrl, outbound, inbound, legLinks,
       options: options.length ? options : [{ seller: inbound.airline, separateTickets: false, price: inbound.price }] };
     await context.close();
     return result;
   } finally {
     await browser.close().catch(() => undefined);
   }
+}
+
+/**
+ * The airline page behind each ticket of a separate-tickets option: its Continue opens Google's
+ * "Purchase separate tickets" dialog, whose two Continue buttons (departing, then returning) each
+ * open the airline's own booking page in a new tab. Overlays catch real clicks, so they are clicked
+ * from the page script.
+ */
+async function separateTicketLinks(page: Page): Promise<{ outbound: string | null; inbound: string | null }> {
+  const clickLeg = (index: number) => page.evaluate(n => {
+    const button = [...document.querySelectorAll<HTMLElement>('[role=dialog] button[aria-label^="Continue to book with"]')][n];
+    button?.click();
+    return Boolean(button);
+  }, index);
+  const opened = async (index: number) => {
+    const popup = page.context().waitForEvent('page', { timeout: 15_000 }).catch(() => null);
+    if (!(await clickLeg(index))) return null;
+    const tab = await popup;
+    if (!tab) return null;
+    // The first request to the airline is the link: Jetstar turns the headless browser away, so the
+    // tab may end on an error page (2026-10-19).
+    const airline = (url: string) => /^https?:/.test(url) && !/(^|\.)google\./.test(new URL(url).hostname);
+    const request = await tab.waitForEvent('request', { predicate: request => request.isNavigationRequest() && airline(request.url()), timeout: 15_000 })
+      .then(request => request.url(), () => null);
+    await tab.close().catch(() => undefined);
+    return request ?? (airline(tab.url()) ? tab.url() : null);
+  };
+  const separate = await page.evaluate(() => {
+    const button = [...document.querySelectorAll<HTMLElement>('button[aria-label^="Continue to book with"]')].find(element => /booked individually/.test(element.getAttribute('aria-label')!));
+    button?.click();
+    return Boolean(button);
+  });
+  if (!separate) return { outbound: null, inbound: null };
+  const shown = await page.waitForFunction(() => /Purchase separate tickets/.test(document.body.innerText), undefined, { timeout: 10_000 }).then(() => true, () => false);
+  if (!shown) return { outbound: null, inbound: null };
+  return { outbound: await opened(0), inbound: await opened(1) };
 }
 
 const ROOM_CHECK_PAGES = 3;

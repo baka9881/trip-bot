@@ -107,6 +107,9 @@ export async function sendToTelegram(segments: readonly Segment[], keyboard: rea
   if (!token || !chatId) throw new Error('找不到 trip bot 的 Telegram 設定');
   let pending = '';
   const flush = async (withKeyboard: boolean) => {
+    // An album cannot carry buttons: when it ends the message, the buttons go out under a short line
+    // (the recommended combination arrived without its buttons, 2026-10-19).
+    if (withKeyboard && keyboard.length && !pending.trim()) pending = '👇 還可以';
     const parts = chunks(pending.trim());
     pending = '';
     for (const [index, part] of parts.entries()) {

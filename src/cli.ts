@@ -23,7 +23,7 @@ import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './dea
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
-import { airlineName, bedText, flightLines, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
+import { airlineName, bedText, flightLines, withAdults, listPhoto, money, recommendedSite, roomType, siteForPrice, siteName } from './format';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { auditFlights, auditStays, type AuditPick } from './audit';
 import { createHash } from 'node:crypto';
@@ -460,7 +460,7 @@ const suitsParty = (room: BookingRoom) => !(readUserPrefs().nonSmoking && isSmok
  * BAKURO's "twin" is a bunk bed with a shared bathroom (2026-10-19). Up to COMBO_ROOM_CHECKS hotels
  * are opened (one Booking page each, cached); a hotel Booking does not sell is taken unchecked.
  */
-async function verifiedForCombo(picks: readonly Pick[]): Promise<{ pick: Pick; room: BookingRoom | null } | null> {
+async function verifiedForCombo(picks: readonly Pick[]): Promise<{ pick: Pick; room: BookingRoom | null; bookingPage?: string } | null> {
   let checks = 0;
   for (const pick of picks) {
     const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
@@ -470,7 +470,7 @@ async function verifiedForCombo(picks: readonly Pick[]): Promise<{ pick: Pick; r
     const found = await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(error => { console.error('[deals] combo room check failed:', String(error).slice(0, 200)); return null; });
     if (!found?.rooms.length) return { pick, room: null }; // Booking showed nothing to check against
     const room = found.rooms.filter(suitsParty).sort((a, b) => (a.stayTotal ?? Infinity) - (b.stayTotal ?? Infinity))[0];
-    if (room) return { pick, room };
+    if (room) return { pick, room, bookingPage: found.hotelUrl };
   }
   return null;
 }
@@ -485,7 +485,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   const [result, verdictPage, booking] = await Promise.all([
     cachedStays(watch, stay, ROOM_CHECK_CANDIDATES, MAX_HOTELS),
     cachedFlights(watch.origin, stay, row.currency, watch.country).catch(() => null),
-    cachedBooking(watch.origin, stay, row.currency, watch.country, prefs).catch(error => { if (isBlocked(error)) throw error; return null; }),
+    cachedBooking(watch.origin, stay, row.currency, watch.country, prefs).catch(error => { if (isBlocked(error)) throw error; console.error("[deals] flight booking failed:", String(error).slice(0, 300)); return null; }),
   ]);
   const currency = row.currency;
   console.log(`⭐ *推薦組合*\n${cityLabel(row.city)} ${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚`);
@@ -496,8 +496,14 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
 
   const checked = await verifiedForCombo((result?.picks ?? []).filter(candidate => fitsPrefs(candidate, prefs)));
   const pick = checked?.pick ?? null;
-  const nightly = pick ? Math.max(recommendedSite(pick.sites)?.nightly ?? 0, pick.nightly) : 0;
-  const site = pick ? siteForPrice(pick.sites, nightly) : null;
+  const quoted = pick ? Math.max(recommendedSite(pick.sites)?.nightly ?? 0, pick.nightly) : 0;
+  // The room checked on Booking is bookable at Booking's price for that very room; when that is lower
+  // than the sites' quote (APA Asakusa Kuramae Kita, 2026-10-19: NT$4,107 against Trip.com's NT$4,607),
+  // book it there.
+  const bookingNightly = checked?.room?.stayTotal && checked.bookingPage ? Math.round(checked.room.stayTotal / nights) : null;
+  const onBooking = bookingNightly !== null && bookingNightly < quoted;
+  const nightly = onBooking ? bookingNightly! : quoted;
+  const site = onBooking ? { site: 'Booking.com', nightly, url: checked!.bookingPage! } : pick ? siteForPrice(pick.sites, nightly) : null;
   // The checked room's own photos on Booking (its views and its bathroom) beat Google's groups,
   // which mix in public baths and shared washrooms.
   const roomPhotos = checked?.room?.photos.length ? checked.room.photos : null;
@@ -507,7 +513,14 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   if (booking && buy) {
     const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
     const legs = (flight: FlightOption) => `${airlineName(flight.airline)} ${flight.departs}→${flight.arrives}`;
-    console.log(`✈️ [去 ${legs(booking.outbound)}](${booking.url})\n回 ${legs(booking.inbound)}`);
+    // Separate tickets are two bookings: each leg links its airline's own page (2026-10-19, the user
+    // got one link for two tickets); otherwise Google's booking page for the whole trip.
+    const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
+    if (buy.chosen.separateTickets) {
+      console.log(`✈️ [去 ${legs(booking.outbound)}](${legLink(booking.legLinks?.outbound)})\n[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})`);
+    } else {
+      console.log(`✈️ [去 ${legs(booking.outbound)}](${booking.url})\n回 ${legs(booking.inbound)}`);
+    }
     console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
     const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
     if (buy.chosen.separateTickets) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);

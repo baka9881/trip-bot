@@ -141,3 +141,12 @@ export const PHONE_WIDTH = 32;
 /** Lines of a message that would wrap on a phone; a hotel's or room's name may wrap, it cannot be shortened. */
 export const tooWide = (text: string) =>
   text.split('\n').filter(line => !/^(\d+\. |🏨 )\[/.test(line) && !/^[\x20-\x7E]+$/.test(line) && phoneWidth(line) > PHONE_WIDTH);
+
+/** An airline link for the whole party: Google's deep links ask for one adult ("adult=1"). */
+export function withAdults(link: string, adults: number): string {
+  try {
+    const url = new URL(link);
+    for (const name of ['adult', 'adults', 'ADT']) if (url.searchParams.has(name)) url.searchParams.set(name, String(adults));
+    return url.toString();
+  } catch { return link; }
+}

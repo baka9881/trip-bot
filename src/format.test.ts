@@ -2,7 +2,7 @@
 // Each case is a mistake that reached the user once, or a rule the user set.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { airlineName, flightLines, listPhoto, PHONE_WIDTH, phoneWidth, pickFlights, recommendedSite, roomType, siteForPrice, tooWide } from './format';
+import { airlineName, flightLines, listPhoto, PHONE_WIDTH, phoneWidth, pickFlights, recommendedSite, roomType, siteForPrice, tooWide, withAdults } from './format';
 import { callbackData, chunks } from './telegram';
 import type { FlightOption } from './deals/flight-list';
 
@@ -91,4 +91,11 @@ test('Telegram messages split between hotels and stay under the link limit', () 
 test('button data fits Telegram\'s 64 bytes', () => {
   assert.equal(callbackData('B4 東京'), 'ff:B4 東京');
   assert.ok(Buffer.byteLength(callbackData('B4 一個非常非常非常非常非常非常非常長的城市名稱')) <= 64);
+});
+
+test('an airline link asks for the whole party', () => {
+  // Google's Scoot deep link for one ticket of a separate-tickets trip (2026-10-19).
+  const scoot = 'https://booking.flyscoot.com/book/flight/one-way/TPE/2026-10-29/NRT?adult=1&child=0&infant=0';
+  assert.equal(withAdults(scoot, 2), 'https://booking.flyscoot.com/book/flight/one-way/TPE/2026-10-29/NRT?adult=2&child=0&infant=0');
+  assert.equal(withAdults('not a url', 2), 'not a url');
 });
