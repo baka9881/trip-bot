@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDormBed, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
+import { isDormBed, isNonSmokingRoom, isSmokingRoom, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
 
 // Excerpt captured from a live Google Hotels search (Okinawa, Nov 1-7 2026, hl=en, curr=TWD).
 const LIVE = `Skip to main content
@@ -375,5 +375,16 @@ describe('dorm beds', () => {
     expect(isDormBed('Bunk Bed in Mixed Dormitory Room')).toBe(true);
     expect(isDormBed('Superior Twin Room')).toBe(false);
     expect(isDormBed('Twin Room with Shared Bathroom')).toBe(false);
+  });
+
+  // The user dislikes the smell of smoke (2026-10-19); "Non-Smoking" contains "Smoking".
+  it('tells smoking rooms from non-smoking and unlabelled ones', () => {
+    expect(isSmokingRoom('Double Room - Smoking')).toBe(true);
+    expect(isSmokingRoom('喫煙 ダブルルーム')).toBe(true);
+    expect(isSmokingRoom('Double Room - Non-Smoking')).toBe(false);
+    expect(isSmokingRoom('Non smoking Twin Room')).toBe(false);
+    expect(isSmokingRoom('Standard Double Room')).toBe(false);
+    expect(isNonSmokingRoom('Double Room - Non-Smoking')).toBe(true);
+    expect(isNonSmokingRoom('Standard Double Room')).toBe(false);
   });
 });

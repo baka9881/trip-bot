@@ -252,6 +252,13 @@ export function parseSiteOffers(panelText: string): SiteOffer[] {
   return [...best.values()].sort((a, b) => a.nightly - b.nightly);
 }
 
+/** A room sold as a smoking room ("Smoking Double Room", "喫煙"); "Non-Smoking" and unlabelled rooms are not. */
+export const isSmokingRoom = (name: string) =>
+  (/\bsmoking\b/i.test(name) && !/\b(non|no)[- ]?smoking\b/i.test(name)) || (/[喫吸][煙菸]/.test(name) && !/禁[煙菸]/.test(name));
+
+/** A room sold as non-smoking. */
+export const isNonSmokingRoom = (name: string) => /\b(non|no)[- ]?smoking\b/i.test(name) || /禁[煙菸]/.test(name);
+
 /** Whether a hotel's listed rooms include one you would not share. */
 export function classifyRooms(rooms: readonly RoomOffer[]): RoomCheck {
   if (!rooms.length) return { status: 'unknown' };

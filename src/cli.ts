@@ -14,7 +14,7 @@
 // Add --telegram to send the output to the trip chat with tap-to-send buttons instead of printing it.
 import { CITY_NAMES, cityLabel } from './deals/message';
 import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from './deals/explore-page';
-import { buildHotelNameUrl, isDormBed, isPrivateHotel, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
+import { buildHotelNameUrl, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import type { FlightOption } from './deals/flight-list';
 import { chooseBookingOption, chooseFlight, chooseReturn, departsInWindow, readPrefs, type Prefs } from './prefs';
@@ -213,7 +213,7 @@ async function cached<T>(kind: string, key: readonly unknown[], compute: () => P
 }
 
 const cachedStays = (watch: { currency: string; country: string }, stay: Stay, candidatesWanted: number, limit: number, fresh = false) =>
-  cached('stays', [stay, watch.currency, watch.country, candidatesWanted, limit], () => verifiedStays(watch, stay, candidatesWanted, limit), fresh);
+  cached('stays', [stay, watch.currency, watch.country, candidatesWanted, limit, readUserPrefs().nonSmoking], () => verifiedStays(watch, stay, candidatesWanted, limit), fresh);
 
 // A flight page without a verdict or flights is a failed load, not worth keeping.
 const cachedFlights = (origin: string, stay: Stay, currency: string, country: string, fresh = false) =>
@@ -225,6 +225,7 @@ const cachedFlights = (origin: string, stay: Stay, currency: string, country: st
 async function verifiedStays(watch: { currency: string; country: string }, stay: Stay, candidatesWanted: number, limit: number) {
   const hotels = await captureHotelList(watch, stay);
   if (!hotels) return null;
+  const { nonSmoking } = readUserPrefs();
   const rooms = hotels.filter(isPrivateHotel);
   const good = rooms.filter(isGood).sort((a, b) => a.nightly - b.nightly);
   const rest = rooms.filter(hotel => !good.includes(hotel)).sort((a, b) => a.nightly - b.nightly);
@@ -243,17 +244,21 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     // its cheapest private room.
     const quoted = recommendedSite(sites.get(hotel.name) ?? [])?.nightly ?? hotel.nightly;
     if (check?.status !== 'private') return [];
+    // Smoking rooms are left out when the user minds the smell; a hotel with nothing else goes.
+    const options = check.options.filter(option => !(nonSmoking && isSmokingRoom(option.name)));
+    if (!options.length) return [];
     // Two or more travellers need a room for two: skip single rooms, and price no lower than the
     // cheapest room that fits (2026-10-18: three lists offered a single room to two people, priced
     // as one). A hotel with only singles is left out.
     if (travelers >= 2) {
       // A room with its own bathroom first; a shared-bathroom room only when the hotel has nothing else.
-      const fits = check.options.filter(option => roomType(option.name) !== '單人房');
+      const fits = options.filter(option => roomType(option.name) !== '單人房');
       const forTwo = fits.find(option => !/共用衛浴/.test(roomType(option.name))) ?? fits[0];
       if (!forTwo) return [];
       return [{ hotel, room: forTwo, nightly: Math.max(forTwo.nightly, quoted) }];
     }
-    return [{ hotel, room: check.room, nightly: check.alsoShared ? Math.max(check.room.nightly, quoted) : quoted }];
+    const room = options[0]!;
+    return [{ hotel, room, nightly: check.alsoShared || room !== check.room ? Math.max(room.nightly, quoted) : quoted }];
   }).sort((a, b) => Number(!isGood(a.hotel)) - Number(!isGood(b.hotel)) || a.nightly - b.nightly);
   const unconfirmed = rated.filter(hotel => checks.get(hotel.name)?.status === 'unknown');
   const picks: Pick[] = [
@@ -291,7 +296,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     else {
       // Party totals: rooms for everyone plus every person's fare, then each person's share.
       console.log(`${nights}晚${roomsNeeded > 1 ? ` ${roomsNeeded}間` : ''} ${money(cost.stay, currency)}`);
-      console.log(`${travelers}人含機票 ${money(cost.total, currency)}\n每人${money(cost.each, currency)}`);
+      console.log(`${travelers}人含機票 ${money(cost.total, currency)}\n每人 ${money(cost.each, currency)}`);
     }
   });
   beginSegment(); // what follows the hotels is plain text again
@@ -447,7 +452,7 @@ async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
 }
 
 /** Whether a Booking room suits the party: fits them, its own bathroom, no bunk or dorm bed. */
-const suitsParty = (room: BookingRoom) => !isDormBed(room.name) && room.bathroom !== 'shared' && !room.bunkInPhotos
+const suitsParty = (room: BookingRoom) => !(readUserPrefs().nonSmoking && isSmokingRoom(room.name)) && !isDormBed(room.name) && room.bathroom !== 'shared' && !room.bunkInPhotos
   && !room.beds.some(bed => /bunk/i.test(bed)) && (room.guests === null || room.guests >= Math.min(travelers, 2));
 
 /**
@@ -521,6 +526,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
       pick.hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
     // Say whether the room was checked on Booking (fits the party, own bathroom, no bunk bed) or not.
     console.log(room ? '✅ 私人衛浴・住得下（Booking）' : '房型未經 Booking 確認');
+    if (prefs.nonSmoking) console.log(room && isNonSmokingRoom(room.name) ? '🚭 禁菸房' : '🚭 沒寫是否禁菸，訂房時選禁菸');
     console.log(`每晚含稅 ${money(nightly, currency)}${site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : ''}`);
   } else {
     console.log('🏨 這幾天沒有符合條件的住宿');
@@ -530,7 +536,7 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   const stayTotal = nightly * nights * roomsNeeded;
   const total = perFare * travelers + stayTotal;
   const each = Math.round(total / travelers);
-  console.log(travelers > 1 ? `${travelers} 人總共約 ${money(total, currency)}\n每人${money(each, currency)}` : `總共約 ${money(total, currency)}`);
+  console.log(travelers > 1 ? `${travelers} 人總共約 ${money(total, currency)}\n每人 ${money(each, currency)}` : `總共約 ${money(total, currency)}`);
   if (prefs.maxPerPerson !== null && each > prefs.maxPerPerson) console.log(`⚠️ 超過每人預算 ${money(each - prefs.maxPerPerson, currency)}`);
   beginSegment();
 }
@@ -680,7 +686,8 @@ async function roomsFor(which: string | undefined) {
     beginSegment(samePhotos ? [] : room.photos, true);
     previousPhotos = room.photos.join();
     const facts = [room.sizeM2 ? `${room.sizeM2} m²` : null, ...room.beds.map(bedText),
-      room.bathroom === 'private' ? '私人衛浴' : room.bathroom === 'shared' ? '共用衛浴' : null].filter(Boolean);
+      room.bathroom === 'private' ? '私人衛浴' : room.bathroom === 'shared' ? '共用衛浴' : null,
+      isSmokingRoom(room.name) ? '🚬 吸菸房' : isNonSmokingRoom(room.name) ? '🚭 禁菸' : null].filter(Boolean);
     // Booking says who a room is for ("Standard Room (for 1 Adult)"); a one-guest room is a single whatever its name.
     // A name like "Standard Room (for 2 Adults)" says no type; the beds do.
     // Two or more beds of any size ("2 small double beds") is a twin; one big bed a double.
@@ -981,6 +988,7 @@ function audit() {
 const PREF_NAMES: Record<keyof Prefs, string> = {
   departAfter: '最早出發', departBefore: '最晚出發', checkedBag: '托運行李', bagFeeEstimate: '廉航行李費估算（每人來回）',
   minStars: '最低星級', minRating: '最低評分', maxPerPerson: '每人預算上限', oneTicketPremium: '一張票最多可以貴多少',
+  nonSmoking: '只要禁菸房',
 };
 
 /** Show the preferences, or set one: `prefs minRating 4.2`, `prefs checkedBag false`, `prefs maxPerPerson none`. */
@@ -998,7 +1006,7 @@ function setPrefs(key: string | undefined, value: string | undefined) {
   const prefs = readPrefs(settings.prefs);
   console.log(['你的偏好', `出發時間 ${prefs.departAfter}–${prefs.departBefore}`, `托運行李：${prefs.checkedBag ? `要（廉航加 ${money(prefs.bagFeeEstimate, 'TWD')}）` : '不用'}`,
     `飯店 ${prefs.minStars} 星以上、評分 ${prefs.minRating} 以上`, `每人預算：${prefs.maxPerPerson === null ? '不限' : money(prefs.maxPerPerson, 'TWD')}`,
-    prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂'].join('\n'));
+    prefs.oneTicketPremium > 0 ? `一張票貴 ${money(prefs.oneTicketPremium, 'TWD')} 內也選一張票` : '分開訂比較便宜就分開訂', prefs.nonSmoking ? '只要禁菸房' : '吸菸房也可以'].join('\n'));
 }
 
 function setTravelers(value: string | undefined) {

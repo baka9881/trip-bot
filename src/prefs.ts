@@ -16,6 +16,8 @@ export interface Prefs {
   maxPerPerson: number | null;
   /** How much more one ticket (and a same-airline return) may cost before the cheaper separate tickets win. */
   oneTicketPremium: number;
+  /** Leave out rooms named as smoking rooms (the user dislikes the smell, 2026-10-19). */
+  nonSmoking: boolean;
 }
 
 // Chosen for the user on 2026-10-19 (they asked for a lazier flow without stating preferences):
@@ -23,7 +25,7 @@ export interface Prefs {
 // they are cheaper (the user's choice, 2026-10-19: oneTicketPremium 0).
 export const DEFAULT_PREFS: Prefs = {
   departAfter: '07:00', departBefore: '22:00', checkedBag: true, bagFeeEstimate: 1800,
-  minStars: 2, minRating: 4.0, maxPerPerson: null, oneTicketPremium: 0,
+  minStars: 2, minRating: 4.0, maxPerPerson: null, oneTicketPremium: 0, nonSmoking: true,
 };
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -40,6 +42,7 @@ export function readPrefs(saved: unknown): Prefs {
   if (typeof raw.minRating === 'number' && raw.minRating >= 0 && raw.minRating <= 5) prefs.minRating = raw.minRating;
   if (raw.maxPerPerson === null || (typeof raw.maxPerPerson === 'number' && raw.maxPerPerson > 0)) prefs.maxPerPerson = raw.maxPerPerson as number | null;
   if (typeof raw.oneTicketPremium === 'number' && raw.oneTicketPremium >= 0) prefs.oneTicketPremium = raw.oneTicketPremium;
+  if (typeof raw.nonSmoking === 'boolean') prefs.nonSmoking = raw.nonSmoking;
   return prefs;
 }
 
