@@ -108,6 +108,8 @@ function parseRoomPhotoUrls(html: string, alts: ReadonlyMap<string, string>): Ma
 /** Whether a photo description shows the room, the bathroom, or neither (amenities, people, close-ups). */
 export function photoKind(alt: string): 'room' | 'bathroom' | null {
   if (/\b(person|people|man|woman|holding|hand)\b/i.test(alt)) return null;
+  // Public baths and shared washrooms are not the room's (the user has no interest in them).
+  if (/\b(public|communal|shared|onsen|hot spring|sauna|spa)\b/i.test(alt)) return null;
   if (/\b(bed|beds|bedroom|hotel room|bunk|futon|tatami)\b/i.test(alt)) return 'room';
   if (/\b(bathroom|toilet|shower|bathtub|tub|sink)\b/i.test(alt)) return 'bathroom';
   return null;

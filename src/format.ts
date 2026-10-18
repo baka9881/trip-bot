@@ -32,10 +32,12 @@ export const bedText = (bed: string) => {
  * bedroom shot) and one of its bathroom, uncropped (the user's choice, 2026-10-18). Two photos,
  * not four, so each hotel stays short on a phone; the "📷 第N間房型" button shows every room type.
  */
-export function listPhoto(photos: HotelPhotos, listedType: string): string[] {
+export function listPhoto(photos: HotelPhotos, listedType: string, publicBath = false): string[] {
   const listed = photos.rooms.find(room => roomType(room.name) === listedType);
   const room = listed?.url ?? photos.rooms[0]?.url ?? photos.bedroom[0];
-  return [room, photos.bathroom[0]].filter((url): url is string => Boolean(url));
+  // A hotel with a public bath files its baths and shared washrooms under Google's "Bathroom";
+  // the user has no interest in the public bath (2026-10-19), so it gets no bathroom photo.
+  return [room, publicBath ? undefined : photos.bathroom[0]].filter((url): url is string => Boolean(url));
 }
 
 // Big sites with a clean Chinese interface (and the hotel's own site): recommended first, since the

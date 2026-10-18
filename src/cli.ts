@@ -275,7 +275,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const url = buildHotelNameUrl({ name: hotel.name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate, currency, country });
     // Google states "N% less than usual" for the list price; show it as money per night.
     const saving = hotel.belowUsualPct ? Math.round(hotel.nightly / (1 - hotel.belowUsualPct / 100) - hotel.nightly) : 0;
-    const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, '')) : [];
+    const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, ''), hotel.publicBath) : [];
     beginSegment(album, true);
     listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly);
     // Flush-left short lines: a caption under a photo is narrow on a phone and indents read as ragged.
@@ -471,7 +471,10 @@ async function recommendCombo(code: string, watch: TripOption['watch'], row: Tri
   const pick = checked?.pick ?? null;
   const nightly = pick ? Math.max(recommendedSite(pick.sites)?.nightly ?? 0, pick.nightly) : 0;
   const site = pick ? siteForPrice(pick.sites, nightly) : null;
-  beginSegment(pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, '')) : [], true);
+  // The checked room's own photos on Booking (its views and its bathroom) beat Google's groups,
+  // which mix in public baths and shared washrooms.
+  const roomPhotos = checked?.room?.photos.length ? checked.room.photos : null;
+  beginSegment(roomPhotos ?? (pick?.photos ? listPhoto(pick.photos, pick.note.replace(/^[✅❔] /, ''), pick.hotel.publicBath) : []), true);
 
   const buy = booking ? chooseBookingOption(booking.options, prefs.oneTicketPremium) : null;
   if (booking && buy) {

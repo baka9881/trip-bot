@@ -53,6 +53,7 @@ describe('Booking.com rooms', () => {
     expect(photoKind('a hotel room with two beds and a desk')).toBe('room');
     expect(photoKind('a white bathroom with a sink and a shower')).toBe('bathroom');
     expect(photoKind('a person holding a cell phone in front of a tv')).toBeNull();
+    expect(photoKind('a public bath with several sinks and stools')).toBeNull();
     expect(photoKind('two toy rubber ducks with faces on a white background')).toBeNull();
     expect(photoKind('a white box filled with black and white toothbrushes')).toBeNull();
   });
