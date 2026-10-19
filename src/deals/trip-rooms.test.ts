@@ -20,6 +20,10 @@ describe('Trip.com rooms', () => {
     expect(tripRoomName('Deluxe 2-Bed Room102 small double bedsHas window(s)Non-smoking161–193 ft²')).toBe('Deluxe 2-Bed Room');
     expect(tripRoomName('Non-smoking Double Room')).toBe('Non-smoking Double Room');
     expect(tripRoomName('3')).toBeNull();
+    // APA Midosuji Hommachi (2026-10-19): names without a room word read as "12 double".
+    expect(tripRoomName('SS Connect 1')).toBe('SS Connect 1');
+    expect(tripRoomName('DD Connect 112 small double bedsCity view')).toBe('DD Connect');
+    expect(tripRoomName('Standard Twin')).toBe('Standard Twin');
     expect(parseTripCard('Deluxe 2-Bed Room | 2 small double beds | Private bathroom').beds).toEqual(['2 small double beds']);
   });
 

@@ -307,7 +307,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const saving = hotel.belowUsualPct ? Math.round(hotel.nightly / (1 - hotel.belowUsualPct / 100) - hotel.nightly) : 0;
     const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, '')) : [];
     beginSegment(album, true);
-    listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly, photos, url);
+    listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly, photos, url, nightly);
     // Flush-left short lines: a caption under a photo is narrow on a phone and indents read as ragged.
     console.log(`${start + index}. [${hotel.name}](${url})`);
     // "私人房" only means the site named no type; it says nothing, so leave it out.
@@ -598,17 +598,19 @@ async function tripSearch(cityArg: string | undefined, outboundDate: string | un
 const LAST_HOTELS_FILE = new URL('../data/last-hotels.json', import.meta.url);
 type ListedHotel = { n: number; name: string; bookingUrl: string | null; tripHotelId?: string | null; nightly?: number;
   /** Google's room photos and its page: the room types of a hotel neither Booking nor Trip.com sells. */
-  googlePhotos?: HotelPhotos; googleUrl?: string };
+  googlePhotos?: HotelPhotos; googleUrl?: string;
+  /** The nightly price the list showed (a site's price for the room); `nightly` is Google's list price, which the watch compares. */
+  shown?: number };
 const listedHotels: ListedHotel[] = [];
 let listedStay: { nights: number; currency: string } | null = null;
 /** The stay of the last hotel list, so a hotel from it can be watched for price drops. */
 let lastStayFor: (Stay & { currency: string; country: string; origin: string }) | null = null;
 
-function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number, googlePhotos?: HotelPhotos, googleUrl?: string) {
+function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number, googlePhotos?: HotelPhotos, googleUrl?: string, shown?: number) {
   const booking = sites.find(site => /^booking/i.test(site.site) && site.url);
   const trip = sites.find(site => /^trip\.com/i.test(site.site) && site.url);
   listedHotels.push({ n, name, bookingUrl: booking?.url ? bookingUrlFromGoogle(booking.url) : null,
-    tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly, googlePhotos, googleUrl });
+    tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly, shown, googlePhotos, googleUrl });
   listedStay = { nights, currency };
 }
 
@@ -723,11 +725,11 @@ const FLIGHT_DROP = 300; // whole round trip, list currency
 const HOTEL_DROP = 200; // per night
 type TripWatch = {
   id: number; origin: string; currency: string; country: string; city: string; outboundDate: string; returnDate: string;
-  flight: number | null; hotel: { name: string; nightly: number } | null; createdAt: string; lastCheckedAt: string | null;
+  flight: number | null; hotel: { name: string; nightly: number; shown?: number } | null; createdAt: string; lastCheckedAt: string | null;
 };
 const readWatches = (): TripWatch[] => { try { return JSON.parse(readFileSync(WATCHES_FILE, 'utf8')); } catch { return []; } };
 const writeWatches = (watches: TripWatch[]) => writeFileSync(WATCHES_FILE, `${JSON.stringify(watches, null, 2)}\n`);
-const watchTitle = (watch: TripWatch) => `${cityLabel(watch.city)} ${md(watch.outboundDate)}–${md(watch.returnDate)}`;
+const watchTitle = (watch: TripWatch) => `${cityLabel(watch.city)} ${dateRange(watch.outboundDate, watch.returnDate)}`;
 
 function findOrAddWatch(stay: { origin: string; currency: string; country: string } & Stay): { watches: TripWatch[]; watch: TripWatch; added: boolean } {
   const watches = readWatches();
@@ -747,9 +749,10 @@ async function watchTrip(code: string | undefined) {
   const found = await cachedFlights(watch.origin, watch, watch.currency, watch.country).catch(() => null);
   watch.flight = found?.flights[0]?.price ?? row.price;
   writeWatches(watches);
-  console.log(`🔔 ${added ? '開始盯' : '已經在盯'}：${watchTitle(watch)}`);
-  console.log(`機票現在最低 ${money(watch.flight, watch.currency)}，便宜 ${money(FLIGHT_DROP, watch.currency)} 以上就通知你。`);
-  console.log('想一起盯飯店：查這趟的住宿，點「📷 第N間房型」後再點「🔔 第N間降價通知」。');
+  console.log(`🔔 ${added ? '開始盯' : '已經在盯'}\n${watchTitle(watch)}`);
+  // The cheapest fare of those days, any flight: not the suggested pair, whose price differs (2026-10-19).
+  console.log(`這幾天最便宜的機票\n每人 ${money(watch.flight, watch.currency)}（不限班次）\n便宜 ${money(FLIGHT_DROP, watch.currency)} 以上就通知你`);
+  console.log('想一起盯飯店：\n點房型照片下的 🔔 按鈕');
   keyboard = [[FLIGHT_LIST_BUTTON]];
 }
 
@@ -761,9 +764,9 @@ function watchHotel(which: string | undefined) {
   const hotel = saved.hotels.find(entry => entry.n === n);
   if (!hotel || !saved.trip || !hotel.nightly) throw new Error(`上一份住宿清單沒有第 ${which} 間。`);
   const { watches, watch } = findOrAddWatch(saved.trip);
-  watch.hotel = { name: hotel.name, nightly: hotel.nightly };
+  watch.hotel = { name: hotel.name, nightly: hotel.nightly, shown: hotel.shown };
   writeWatches(watches);
-  console.log(`🔔 開始盯：${watchTitle(watch)}\n${hotel.name}\n每晚現在 ${money(hotel.nightly, watch.currency)}，便宜 ${money(HOTEL_DROP, watch.currency)} 以上就通知你。`);
+  console.log(`🔔 開始盯\n${watchTitle(watch)}\n${hotel.name}\n每晚現在 ${money(hotel.shown ?? hotel.nightly, watch.currency)}\n便宜 ${money(HOTEL_DROP, watch.currency)} 以上就通知你`);
   keyboard = [[FLIGHT_LIST_BUTTON]];
 }
 
@@ -772,8 +775,8 @@ function listWatches() {
   if (!watches.length) { console.log('目前沒有在盯的行程。'); return; }
   for (const watch of watches) {
     console.log(`${watch.id}. ${watchTitle(watch)}`);
-    if (watch.flight !== null) console.log(`機票 ${money(watch.flight, watch.currency)}`);
-    if (watch.hotel) console.log(`${watch.hotel.name} 每晚 ${money(watch.hotel.nightly, watch.currency)}`);
+    if (watch.flight !== null) console.log(`最便宜機票每人 ${money(watch.flight, watch.currency)}`);
+    if (watch.hotel) console.log(`${watch.hotel.name}\n每晚 ${money(watch.hotel.shown ?? watch.hotel.nightly, watch.currency)}`);
   }
 }
 
@@ -806,10 +809,17 @@ async function checkWatches(): Promise<string[]> {
       const now = hotels?.find(hotel => hotel.name === watch.hotel!.name)?.nightly;
       if (now !== undefined && now <= watch.hotel.nightly - HOTEL_DROP) {
         const url = buildHotelNameUrl({ name: watch.hotel.name, city: watch.city, checkIn: watch.outboundDate, checkOut: watch.returnDate, currency: watch.currency, country: watch.country });
-        alerts.push(`🔔 飯店降價：${watchTitle(watch)}\n[${watch.hotel.name}](${url})\n每晚 ${money(watch.hotel.nightly, watch.currency)} → ${money(now, watch.currency)}`
-          + `（便宜 ${money(watch.hotel.nightly - now, watch.currency)}）`);
+        // Said in the price the list showed (2026-10-19: the watch quoted Google's lower list price,
+        // NT$1,386 for a hotel listed at NT$1,801), moved by the drop Google's price made.
+        const drop = watch.hotel.nightly - now;
+        const before = watch.hotel.shown ?? watch.hotel.nightly;
+        alerts.push(`🔔 飯店降價：${watchTitle(watch)}\n[${watch.hotel.name}](${url})\n每晚約 ${money(before, watch.currency)} → ${money(before - drop, watch.currency)}`
+          + `\n便宜 ${money(drop, watch.currency)}`);
       }
-      if (now !== undefined) watch.hotel.nightly = Math.min(watch.hotel.nightly, now);
+      if (now !== undefined && now < watch.hotel.nightly) {
+        if (watch.hotel.shown !== undefined) watch.hotel.shown -= watch.hotel.nightly - now;
+        watch.hotel.nightly = now;
+      }
     }
     watch.lastCheckedAt = new Date().toISOString();
     writeWatches(watches); // keep progress if a later trip meets a block

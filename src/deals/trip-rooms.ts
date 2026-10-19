@@ -45,8 +45,12 @@ export class TripSignInWallError extends Error {
 export function tripRoomName(line: string): string | null {
   // The room word may run straight into a digit ("Room102 …"), so end it at anything but a letter.
   // "Room"/"Suite"/"Studio" end a name ("Non-smoking Double Room"); a bed word only when there is none.
-  const ending = (words: string) => new RegExp(`^(.*?\\b(?:${words})(?![a-z])(?:\\s*\\([^)]*\\))?)`, 'i').exec(line.trim())?.[1]?.trim();
-  const name = ending('room|suite|studio') ?? ending('twin|double|single|family');
+  // First drop the beds a run-on line carries after the name ("…Room102 small double beds…": guests,
+  // then the bed count), so a name without a room word ("SS Connect 1", APA Midosuji, 2026-10-19) is
+  // not cut inside the beds into "12 double".
+  const trimmed = line.trim().replace(/\d*\s*\d+ (?:(?:small|large|extra-large|semi)[- ])?(?:single|double|queen|king|twin|bunk|sofa)\b.*$/i, '').trim();
+  const ending = (words: string) => new RegExp(`^(.*?\\b(?:${words})(?![a-z])(?:\\s*\\([^)]*\\))?)`, 'i').exec(trimmed)?.[1]?.trim();
+  const name = ending('room|suite|studio') ?? ending('twin|double|single|family') ?? (/[a-z]{2}/i.test(trimmed) ? trimmed : undefined);
   return name && name.length <= 60 ? name : null;
 }
 
