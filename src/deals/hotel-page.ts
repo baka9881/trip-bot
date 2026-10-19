@@ -351,6 +351,11 @@ const PLACE_NAMES: Record<string, string> = {
   Katsushika: '葛飾區', Edogawa: '江戶川區', Naha: '那霸', Okinawa: '沖繩市', Uruma: '宇流麻', Ginowan: '宜野灣', Urasoe: '浦添',
   Tomigusuku: '豐見城', Chatan: '北谷', Yomitan: '讀谷', Naniwa: '浪速區', Nishi: '西區', Yodogawa: '淀川區', Tennoji: '天王寺區',
   Higashiosaka: '東大阪', Sakai: '堺', Kawaguchi: '川口', Hachioji: '八王子', Kawasaki: '川崎', Yokohama: '橫濱', Chiba: '千葉',
+  Nishinari: '西成區', Higashinari: '東成區', Ikuno: '生野區', Abeno: '阿倍野區', Sumiyoshi: '住吉區', Suminoe: '住之江區',
+  Fukushima: '福島區', Miyakojima: '都島區', Joto: '城東區', Konohana: '此花區', Taisho: '大正區', Nishiyodogawa: '西淀川區',
+  Higashiyodogawa: '東淀川區', Asahi: '旭區', Tsurumi: '鶴見區', Hirano: '平野區', Amagasaki: '尼崎', Toyonaka: '豐中', Suita: '吹田',
+  Shimogyo: '下京區', Nakagyo: '中京區', Higashiyama: '東山區', Minami: '南區', Sakyo: '左京區', Kamigyo: '上京區', Ukyo: '右京區',
+  Hakata: '博多區', Naka: '中區', Nakamura: '中村區', Higashi: '東區', Atsuta: '熱田區', Kokurakita: '小倉北區',
 };
 
 /** A hotel's town or ward from Google's address ("2 Chome-1-29 Uechi, Okinawa, 904-0031, Japan" → 沖繩市) and its postal code. */

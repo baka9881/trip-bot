@@ -371,11 +371,9 @@ const fitsPrefs = (pick: Pick, prefs: Prefs) =>
   (pick.hotel.stars ?? 0) >= prefs.minStars && (pick.hotel.rating === null || pick.hotel.rating >= prefs.minRating);
 
 async function hotelsFor(code: string | undefined, nearby = false) {
-  const { watch, row, label } = await resolveOption(code);
+  const { watch, row } = await resolveOption(code);
   const stay: Stay = { city: row.city, outboundDate: row.outboundDate, returnDate: row.returnDate };
   const nights = nightsOf(row);
-  const fare = travelers > 1 ? `每人 ${money(row.price, row.currency)}` : money(row.price, row.currency);
-  const flightLine = `✈️ ${code!.toUpperCase()} ${cityLabel(row.city)} ${fare}\n${row.stops === 0 ? '直飛' : `轉${row.stops}次`}・${label}`;
   lastStayFor = { ...stay, currency: row.currency, country: watch.country, origin: watch.origin };
   const watchButton = `🔔 ${code!.toUpperCase()} 降價通知我`;
   keyboard = !nearby && nearbyAreas(row.city).length
@@ -383,7 +381,8 @@ async function hotelsFor(code: string | undefined, nearby = false) {
 
   if (nearby) {
     const areas = nearbyAreas(row.city);
-    console.log(`🏨 *${cityLabel(row.city)} 周邊住宿*\n${dateRange(row.outboundDate, row.returnDate)}・${nights} 晚\n${flightLine}`);
+    const perFare = await planFare(watch, row, stay, readUserPrefs());
+    console.log(`🏨 *${cityLabel(row.city)} 周邊住宿*\n${dateRange(row.outboundDate, row.returnDate)}・${nights} 晚\n✈️ 建議的機票每人 ${money(perFare, row.currency)}`);
     if (!areas.length) {
       console.log(`\n${cityLabel(row.city)} 沒有設定周邊住宿區域，市區的選擇已經是主要選項。`);
       return;
@@ -394,7 +393,7 @@ async function hotelsFor(code: string | undefined, nearby = false) {
       const result = await cachedStays(watch, areaStay, NEARBY_CANDIDATES, NEARBY_PER_AREA);
       console.log(`\n📍 *${area.label}*\n${area.ride.replace('到', '🚃 到')}`);
       if (!result?.picks.length) { console.log('這次沒查到確認過的私人房。'); continue; }
-      printPicks(await ownBathrooms(result.picks), areaStay, nights, row.price, row.currency, watch.country, number);
+      printPicks(await ownBathrooms(result.picks), areaStay, nights, perFare, row.currency, watch.country, number);
       number += result.picks.length;
     }
     return;
@@ -474,6 +473,17 @@ async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
  * each linked where it is booked. The user picks the hotel from the list that follows (they found
  * one recommended hotel too poor, 2026-10-19). Returns each person's fare, bag estimate included.
  */
+/**
+ * Each person's fare for the flights printFlightPlan suggests, bag estimate included, without printing
+ * them: the nearby list totals with it too (2026-10-19: it used the cheapest fare of the day instead).
+ */
+async function planFare(watch: TripOption['watch'], row: TripOption['row'], stay: Stay, prefs: Prefs): Promise<number> {
+  const booking = await cachedBooking(watch.origin, stay, row.currency, watch.country, prefs).catch(error => { if (isBlocked(error)) throw error; return null; });
+  const buy = booking ? chooseBookingOption(booking.options, prefs.oneTicketPremium) : null;
+  if (!booking || !buy) return row.price;
+  return buy.chosen.price + (prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost) ? prefs.bagFeeEstimate : 0);
+}
+
 async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'], stay: Stay, prefs: Prefs): Promise<number> {
   const currency = row.currency;
   const [verdictPage, booking] = await Promise.all([
