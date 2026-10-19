@@ -979,7 +979,7 @@ async function checkAll() {
   if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', '1'], ['rooms', '2']);
   // A dated trip as the user would ask for one: Osaka, five nights, two months out.
   const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
-  runs.push(['trip', '大阪', day(60), day(65)]);
+  runs.push(['trip', '大阪', day(60), day(65)], ['watches'], ['prefs']);
   let failures = 0;
   for (const run of runs) {
     const result = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, ...run, '--check'], { encoding: 'utf8', timeout: 600_000 });
@@ -1087,6 +1087,8 @@ function setTravelers(value: string | undefined) {
 const [command = 'report', ...args] = process.argv.slice(2);
 const limitIndex = args.indexOf('--limit');
 const limit = limitIndex >= 0 ? Math.min(40, Math.max(1, Number(args[limitIndex + 1]) || 10)) : 10;
+// The arguments without flags: `prefs --telegram` read the flag as a preference to set (2026-10-19).
+const words = args.filter(arg => !arg.startsWith('--'));
 const toTelegram = args.includes('--telegram');
 const checkOnly = args.includes('--check'); // render as for Telegram, check the user's rules, send nothing
 const print = console.log;
@@ -1101,17 +1103,17 @@ try {
   else if (command === 'add-region') addRegion(args[0], args[1]);
   else if (command === 'remove-region') removeRegion(args[0]);
   else if (command === 'scan-now') scanNow();
-  else if (command === 'travelers') setTravelers(args[0]);
-  else if (command === 'prefs') setPrefs(args[0], args[1]);
+  else if (command === 'travelers') setTravelers(words[0]);
+  else if (command === 'prefs') setPrefs(words[0], words[1]);
   else if (command === 'hotels-for') {
     await hotelsFor(args[0], args.includes('--nearby')); // --all is the default now
     saveListedHotels();
-  } else if (command === 'rooms') await roomsFor(args[0]);
+  } else if (command === 'rooms') await roomsFor(words[0]);
   else if (command === 'trip') await tripSearch(args[0], args[1], args[2]);
   else if (command === 'watch') await watchTrip(args[0]);
-  else if (command === 'watch-hotel') watchHotel(args[0]);
+  else if (command === 'watch-hotel') watchHotel(words[0]);
   else if (command === 'watches') listWatches();
-  else if (command === 'unwatch') unwatch(args[0]);
+  else if (command === 'unwatch') unwatch(words[0]);
   else if (command === 'jobs') await runJobs();
   else if (command === 'tick') await tick();
   else if (command === 'audit') audit();
@@ -1131,7 +1133,7 @@ try {
       console.error(`[rules] ${problems.length} problem(s): ${problems.join(' | ')}`);
     }
   }
-  if (toTelegram && segments.some(segment => segment.text)) {
+  if (toTelegram && !checkOnly && segments.some(segment => segment.text)) {
     const text = segments.map(segment => segment.text).filter(Boolean).join('\n');
     try {
       await sendToTelegram(segments, keyboard);
