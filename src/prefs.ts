@@ -95,6 +95,20 @@ export const fitsCheckIn = (flight: Pick<FlightOption, 'arrives'>, city?: string
 export const fitsCheckOut = (flight: Pick<FlightOption, 'departs'>, prefs: Pick<Prefs, 'hotelCheckOut'>, city?: string) =>
   leavesHotel(flight, city) >= minutes(prefs.hotelCheckOut) - EARLIEST_BEFORE_CHECKOUT;
 
+/**
+ * What the arrival and departure mean at the hotel, in the user's words. Reaching the hotel before
+ * check-in means dropping the bags first; a return later than check-out means checking out at
+ * check-out and leaving for the airport later (2026-10-19: "10:00 退房" with "13:10 離開飯店").
+ */
+export function hotelTimes(outbound: Pick<FlightOption, 'arrives'>, inbound: Pick<FlightOption, 'departs'>, prefs: Pick<Prefs, 'hotelCheckIn' | 'hotelCheckOut'>, city?: string) {
+  const arrive = atHotel(outbound, city);
+  const leave = leavesHotel(inbound, city);
+  return {
+    arrive: clock(arrive), late: !fitsCheckIn(outbound, city), beforeCheckIn: arrive < minutes(prefs.hotelCheckIn),
+    leave: clock(leave), tooEarly: !fitsCheckOut(inbound, prefs, city), afterCheckOut: leave > minutes(prefs.hotelCheckOut),
+  };
+}
+
 /** The cheapest of the flights that suit the stay, else of all of them: a recommendation either way. */
 const cheapestSuiting = (flights: readonly FlightOption[], suits: (flight: FlightOption) => boolean, prefs: Prefs) => {
   const sorted = [...flights].sort((a, b) => comparableFare(a, prefs) - comparableFare(b, prefs));

@@ -17,7 +17,7 @@ import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from 
 import { buildHotelNameUrl, hotelArea, inTown, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, parseGoogleRoomRow, roomKey, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import type { FlightOption } from './deals/flight-list';
-import { atHotel, SHORT_TRIP_NIGHTS, chooseBookingOption, chooseFlight, chooseReturn, clock, fitsCheckIn, fitsCheckOut, leavesHotel, readPrefs, type Prefs } from './prefs';
+import { SHORT_TRIP_NIGHTS, chooseBookingOption, chooseFlight, chooseReturn, hotelTimes, readPrefs, type Prefs } from './prefs';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
 import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
@@ -510,14 +510,19 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
   // got one link for two tickets); otherwise Google's booking page for the whole trip.
   const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
   const separate = buy.chosen.separateTickets;
-  // When the party reaches the hotel and must leave it, against its usual check-in and check-out.
-  const arrival = atHotel(booking.outbound, row.city);
-  const leave = leavesHotel(booking.inbound, row.city);
+  // When the party reaches the hotel and must leave it, against its usual check-in and check-out:
+  // early means dropping the bags first, a later return means checking out on time and leaving later.
+  const times = hotelTimes(booking.outbound, booking.inbound, prefs, row.city);
   console.log(`✈️ [去 ${legs(booking.outbound)}](${separate ? legLink(booking.legLinks?.outbound) : booking.url})`);
-  console.log(`${fitsCheckIn(booking.outbound, row.city) ? '' : '⚠️ '}飛 ${shortDuration(booking.outbound.duration)}・約 ${clock(arrival)} 到飯店`);
+  console.log(`${times.late ? '⚠️ ' : ''}飛 ${shortDuration(booking.outbound.duration)}・約 ${times.arrive} 到飯店`);
+  if (times.beforeCheckIn) console.log(`${prefs.hotelCheckIn} 才能入住・可先寄放行李`);
   console.log(separate ? `[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})` : `回 ${legs(booking.inbound)}`);
-  console.log(`${fitsCheckOut(booking.inbound, prefs, row.city) ? '' : '⚠️ '}飛 ${shortDuration(booking.inbound.duration)}・${clock(leave)} 離開飯店`);
-  console.log(`飯店 ${prefs.hotelCheckIn} 入住・${prefs.hotelCheckOut} 退房`);
+  if (times.afterCheckOut) {
+    console.log(`飛 ${shortDuration(booking.inbound.duration)}・${prefs.hotelCheckOut} 退房`);
+    console.log(`${times.leave} 出發去機場・可寄放行李`);
+  } else {
+    console.log(`${times.tooEarly ? '⚠️ ' : ''}飛 ${shortDuration(booking.inbound.duration)}・${times.leave} 就要離開飯店`);
+  }
   const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
   console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
   // A short trip may buy more time there: say what it costs over the cheapest fare for those dates.
@@ -1121,7 +1126,7 @@ try {
   else throw new Error('指令：report、trip、hotels-for、rooms、watch、watch-hotel、watches、unwatch、travelers、regions、add-region、remove-region、scan-now、jobs');
   if ((toTelegram || checkOnly) && segments.some(segment => segment.text)) {
     console.log = print;
-    const problems = checkOutput(segments, keyboard, { travelers, nonSmoking: readUserPrefs().nonSmoking });
+    const problems = checkOutput(segments, keyboard, { travelers, nonSmoking: readUserPrefs().nonSmoking, checkIn: readUserPrefs().hotelCheckIn, checkOut: readUserPrefs().hotelCheckOut });
     if (checkOnly) {
       print(problems.length ? problems.map(problem => `✗ ${problem}`).join('\n') : '✓');
       if (problems.length) process.exitCode = 1;

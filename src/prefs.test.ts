@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { atHotel, chooseBookingOption, chooseFlight, chooseReturn, clock, comparableFare, DEFAULT_PREFS, departsInWindow, fitsCheckOut, leavesHotel, readPrefs } from './prefs';
+import { atHotel, hotelTimes, chooseBookingOption, chooseFlight, chooseReturn, clock, comparableFare, DEFAULT_PREFS, departsInWindow, fitsCheckOut, leavesHotel, readPrefs } from './prefs';
 import type { FlightOption } from './deals/flight-list';
 
 const flight = (airline: string, price: number, departs: string, lowCost = false): FlightOption =>
@@ -70,6 +70,16 @@ describe('preferences', () => {
     const late = flight('Thai Lion Air', 5900, '19:30', true);
     expect(chooseReturn([early, late], 'Peach', DEFAULT_PREFS, 'Okinawa', 2)?.departs).toBe('19:30');
     expect(chooseReturn([early, late], 'Peach', DEFAULT_PREFS, 'Okinawa', 6)?.departs).toBe('11:00');
+  });
+
+  // Tokyo, Oct 29–Nov 7 (2026-10-19): Peach 16:40 home read "13:10 離開飯店" under a 10:00 check-out.
+  it('checks out on time and leaves for the airport later', () => {
+    const out = { ...flight('Scoot', 7921, '14:25', true), arrives: '18:30' };
+    const home = flight('Peach', 7921, '16:40', true);
+    expect(hotelTimes(out, home, DEFAULT_PREFS, 'Tokyo')).toMatchObject({ arrive: '21:00', beforeCheckIn: false, leave: '13:10', afterCheckOut: true });
+    const morning = { ...flight('Peach', 5000, '07:30', true), arrives: '09:50' };
+    expect(hotelTimes(morning, flight('Peach', 5000, '09:00', true), DEFAULT_PREFS, 'Okinawa'))
+      .toMatchObject({ arrive: '11:05', beforeCheckIn: true, leave: '06:30', afterCheckOut: false, tooEarly: true });
   });
 
   it('pairs the cheapest return, the same airline only within the one-ticket premium', () => {

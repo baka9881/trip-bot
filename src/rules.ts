@@ -5,7 +5,7 @@
 import { phoneWidth, PHONE_WIDTH } from './format';
 
 export interface CheckedSegment { text: string; photos: readonly string[] }
-export interface RuleContext { travelers: number; nonSmoking: boolean }
+export interface RuleContext { travelers: number; nonSmoking: boolean; checkIn: string; checkOut: string }
 
 const AMOUNT = /NT\$([\d,]+)/;
 const amount = (line: string | undefined) => {
@@ -50,6 +50,17 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
   if (outbound && !flies(outboundAt)) problems.push(`去程沒寫飛行時間：${shown[outboundAt]}`);
   if (inbound && !flies(inboundAt)) problems.push(`回程沒寫飛行時間：${shown[inboundAt]}`);
   if (lines.some(line => /^分開訂兩張票/.test(line)) && !(outbound?.includes('](') && inbound?.includes(']('))) problems.push('分開訂兩張票，但去回沒有各自的訂票連結');
+  // Leaving the hotel and arriving at it make sense against check-out and check-in (2026-10-19:
+  // "10:00 退房" with "13:10 離開飯店"): nobody stays past check-out, and an early arrival drops its bags.
+  const clockOf = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  shown.forEach((line, index) => {
+    const leave = /(\d\d:\d\d) (?:就要)?離開飯店/.exec(line);
+    if (leave && clockOf(leave[1]!) > clockOf(context.checkOut)) problems.push(`退房 ${context.checkOut} 之後才離開飯店：${line}`);
+    const arrive = /約 (\d\d:\d\d) 到飯店/.exec(line);
+    if (arrive && clockOf(arrive[1]!) < clockOf(context.checkIn) && !/寄放/.test(shown[index + 1] ?? '')) {
+      problems.push(`入住 ${context.checkIn} 之前到飯店，沒說可以先寄放行李：${line}`);
+    }
+  });
   // Flights fit the hotel's check-in and check-out (2026-10-19).
   for (const line of lines) if (/^⚠️ .*(到飯店|離開飯店)/.test(line)) problems.push(`航班時間不配合入住或退房：${line}`);
 
