@@ -635,7 +635,10 @@ const ROOM_PHOTO_BUTTON = (n: number) => `📷 第${n}間房型`;
 function saveListedHotels() {
   if (!listedHotels.length) return;
   writeFileSync(LAST_HOTELS_FILE, `${JSON.stringify({ savedAt: new Date().toISOString(), stay: listedStay, trip: lastStayFor, hotels: listedHotels }, null, 2)}\n`);
-  const buttons = listedHotels.filter(hotel => hotel.bookingUrl || hotel.tripHotelId || hotel.googlePhotos?.rooms.length).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
+  // Every hotel with anything to show gets its button (2026-10-19: one with only Google's bedroom photos had none).
+  const showable = (hotel: ListedHotel) => hotel.bookingUrl || hotel.tripHotelId || hotel.googlePhotos?.rooms.length
+    || hotel.googlePhotos?.bedroom.length || hotel.googlePhotos?.bathroom.length;
+  const buttons = listedHotels.filter(showable).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
   const rows: string[][] = [];
   for (let start = 0; start < buttons.length; start += BUTTONS_PER_ROW) rows.push(buttons.slice(start, start + BUTTONS_PER_ROW));
   keyboard = [...rows, ...keyboard];
@@ -682,6 +685,14 @@ async function roomsFor(which: string | undefined) {
     }
     result = { hotelUrl: hotel.googleUrl ?? '', rooms: [...byType.values()].slice(0, 4) };
     source = 'Google';
+  }
+  // Nothing names its room types: show the hotel's room and bathroom photos Google has, and say so.
+  if (!result?.rooms.length && (hotel.googlePhotos?.bedroom.length || hotel.googlePhotos?.bathroom.length)) {
+    beginSegment([...hotel.googlePhotos.bedroom, ...hotel.googlePhotos.bathroom].slice(0, 4), true);
+    console.log(`📷 *${n}. ${hotel.name}*\n房間和浴室照片（Google）\n訂房網站沒有列出房型`);
+    beginSegment();
+    console.log(`[在 Google 看房型和價格](${hotel.googleUrl ?? ''})`);
+    return;
   }
   if (!result?.rooms.length) {
     const link = hotel.bookingUrl ? `\n[直接在 Booking 看這間](${hotel.bookingUrl})` : '';
@@ -982,6 +993,15 @@ async function checkAll() {
   const entries = [...new Set((await activeWatches()).filter(({ watch }) => watch.lastScanAt).map(({ letter }) => letter))];
   const runs: string[][] = [['report', 'all', '--limit', '5'], ...entries.map(letter => ['hotels-for', `${letter}1`])];
   if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', '1'], ['rooms', '2']);
+  // The nearby list too (2026-10-19: it went unchecked and a hotel lost its button): the first option
+  // whose city has nearby areas, then the room photos of each hotel it lists.
+  const options = entries.flatMap(letter => [1, 2, 3, 4, 5].map(number => `${letter}${number}`));
+  for (const code of options) {
+    const option = await resolveOption(code).catch(() => null);
+    if (!option || !nearbyAreas(option.row.city).length) continue;
+    runs.push(['hotels-for', code, '--nearby'], ...[1, 2, 3, 4, 5].map(n => ['rooms', String(n)]));
+    break;
+  }
   // A dated trip as the user would ask for one: Osaka, five nights, two months out.
   const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
   runs.push(['trip', '大阪', day(60), day(65)], ['watches'], ['prefs']);

@@ -100,6 +100,14 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
   const roomNames = lines.filter((line, index) => /^🛏 /.test(lines[index - 1] ?? ''));
   for (const name of new Set(roomNames.filter((name, index) => roomNames.indexOf(name) !== index))) problems.push(`房型重複：${name}`);
 
+  // Every listed hotel has its room-photo button (2026-10-19: hotel 3 of 5 had none).
+  const buttons = keyboard.flat();
+  for (const segment of segments) {
+    const head = segment.text.split('\n').find(line => HOTEL_LINE.test(line));
+    const n = head ? HOTEL_LINE.exec(head)![1] : null;
+    if (n && !buttons.includes(`📷 第${n}間房型`)) problems.push(`第 ${n} 間沒有房型按鈕`);
+  }
+
   // Buttons to tap instead of typing (2026-10-17): a list of options always comes with them.
   if (/^\*?[A-C]\d\*? \[|^\d+\. \[/m.test(text) && !keyboard.length) problems.push('有選項但沒有按鈕');
   return problems;

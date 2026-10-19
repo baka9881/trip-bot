@@ -52,3 +52,10 @@ test('hotel times agree with check-in and check-out', () => {
     .replace('08:40 就要離開飯店', '10:00 退房\n13:10 出發去機場・可寄放行李') };
   assert.deepEqual(checkOutput([told, good], keyboard, context), []);
 });
+
+// Tokyo nearby list (2026-10-19): hotel 3 had no room-photo button.
+test('every listed hotel has its room-photo button', () => {
+  const second = { ...good, text: good.text.replace('1. [APA Hotel]', '2. [Sunroute]') };
+  assert.match(checkOutput([plan, good, second], keyboard, context).join('\n'), /第 2 間沒有房型按鈕/);
+  assert.deepEqual(checkOutput([plan, good, second], [['📷 第1間房型', '📷 第2間房型']], context), []);
+});
