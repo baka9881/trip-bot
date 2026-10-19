@@ -290,7 +290,7 @@ export interface HotelRating { score: number; source: string }
  * Google gives them a hotel class. Runs a few pages at a time in one browser.
  */
 export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'country'>,
-  stay: Pick<ExploreQuote, 'city' | 'outboundDate' | 'returnDate'>, names: readonly string[]): Promise<{ rooms: Map<string, RoomCheck>; ratings: Map<string, HotelRating>; sites: Map<string, SiteOffer[]>; photos: Map<string, HotelPhotos> }> {
+  stay: Pick<ExploreQuote, 'city' | 'outboundDate' | 'returnDate'>, names: readonly string[]): Promise<{ rooms: Map<string, RoomCheck>; ratings: Map<string, HotelRating>; sites: Map<string, SiteOffer[]>; photos: Map<string, HotelPhotos>; addresses: Map<string, string> }> {
   const results = new Map<string, RoomCheck>(names.map(name => [name, { status: 'unknown' }]));
   // Some list layouts print no ratings, so read each hotel's from its own search page.
   const ratings = new Map<string, HotelRating>();
@@ -298,8 +298,9 @@ export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'count
   const sites = new Map<string, SiteOffer[]>();
   // Room and bathroom photos, so the user can judge a room without opening a booking site.
   const photos = new Map<string, HotelPhotos>();
+  const addresses = new Map<string, string>();
   const rooms = new Map<string, HotelPhotos['rooms']>();
-  if (!names.length) return { rooms: results, ratings, sites, photos };
+  if (!names.length) return { rooms: results, ratings, sites, photos, addresses };
   const browser = await launchBrowser();
   try {
     const context = await createStealthContext(browser);
@@ -386,6 +387,16 @@ export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'count
             const large = (urls: string[]) => urls.map(url => largePhotoUrl(url)).filter((url): url is string => url !== null).slice(0, 2);
             const found = { rooms: rooms.get(name) ?? [], bedroom: large(thumbnails.bedroom), bathroom: large(thumbnails.bathroom) };
             if (found.rooms.length || found.bedroom.length || found.bathroom.length) photos.set(name, found);
+            // The Overview tab gives the address: where the hotel is (2026-10-19: four of six "Okinawa"
+            // hotels were an hour from Naha, and the list did not say).
+            await page.evaluate(() => ([...document.querySelectorAll('[role=tab], a, button, div')]
+              .find(element => element.textContent?.trim() === 'Overview') as HTMLElement | undefined)?.click());
+            await page.waitForFunction(() => /\d{3}-\d{4},? Japan/.test(document.body.innerText), undefined, { timeout: 6_000 }).catch(() => undefined);
+            const address = await page.evaluate(() => {
+              const text = document.body.innerText;
+              return /[^\n•]*\d{3}-\d{4},? Japan/.exec(text.slice(text.lastIndexOf('Back to list of all results')))?.[0]?.trim() ?? null;
+            });
+            if (address) addresses.set(name, address);
           } catch (error) {
             // A block ends the whole check: more requests would only prolong it.
             if (error instanceof GoogleBlockedError) throw error;
@@ -403,7 +414,7 @@ export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'count
     queue.push(...names.filter(name => results.get(name)?.status === 'unknown' && !photos.has(name)));
     if (queue.length) await worker();
     await context.close();
-    return { rooms: results, ratings, sites, photos };
+    return { rooms: results, ratings, sites, photos, addresses };
   } finally {
     await browser.close().catch(() => undefined);
   }

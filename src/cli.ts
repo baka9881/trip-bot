@@ -14,10 +14,10 @@
 // Add --telegram to send the output to the trip chat with tap-to-send buttons instead of printing it.
 import { CITY_NAMES, cityLabel } from './deals/message';
 import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from './deals/explore-page';
-import { buildHotelNameUrl, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, parseGoogleRoomRow, roomKey, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
+import { buildHotelNameUrl, hotelArea, inTown, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, parseGoogleRoomRow, roomKey, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import type { FlightOption } from './deals/flight-list';
-import { atHotel, chooseBookingOption, chooseFlight, chooseReturn, clock, fitsCheckIn, fitsCheckOut, leavesHotel, readPrefs, type Prefs } from './prefs';
+import { atHotel, SHORT_TRIP_NIGHTS, chooseBookingOption, chooseFlight, chooseReturn, clock, fitsCheckIn, fitsCheckOut, leavesHotel, readPrefs, type Prefs } from './prefs';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
 import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
@@ -71,6 +71,10 @@ const taipei = (date: Date | null) => date
   ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(date)
   : '尚未掃描';
 const md = (iso: string) => iso.slice(5).replace('-', '/');
+/** "10/31(六)–11/02(一)": the weekdays tell how many days off a trip takes (the user asked, 2026-10-19). */
+const WEEKDAYS = '日一二三四五六';
+const weekday = (iso: string) => WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()]!;
+const dateRange = (from: string, to: string) => `${md(from)}(${weekday(from)})–${md(to)}(${weekday(to)})`;
 const PLACE = /^[A-Za-z][A-Za-z .'-]{0,48}$/;
 
 const LENGTH_ICON: Record<TripLength, string> = { weekend: '🗓', week: '🧳', two_weeks: '🏝' };
@@ -156,7 +160,7 @@ async function report(filter: string, limit: number) {
       const url = buildCardSearchUrl(watch.origin, row, row.currency);
       const versus = versusUsual(row.price, usual.get(row.city), row.currency);
       console.log(`*${letter}${index + 1}* [${cityLabel(row.city)}](${url}) ${money(row.price, row.currency)}${row.stops === 0 ? '' : ` 轉${row.stops}`}`);
-      console.log(`${md(row.outboundDate)}–${md(row.returnDate)}${versus}`);
+      for (const line of phoneLines([dateRange(row.outboundDate, row.returnDate), versus.replace(/^・/, '')])) console.log(line);
     });
   }
   const since = new Date(Date.now() - 7 * 86_400_000);
@@ -164,10 +168,21 @@ async function report(filter: string, limit: number) {
   if (deals.length) {
     console.log(`\n🔥 *最近的促銷*`);
     for (const deal of deals) {
-      const message = deal.message as { title?: string; url?: string };
+      const message = deal.message as { title?: string; url?: string; body?: string };
       // Alerts saved before 2026-10-19 carry the older, wider title "日本促銷（週末）：帶廣 NT$16,359".
       const title = (message.title ?? '促銷').replace(/^.+促銷（(.+)）：(.+)$/, '$2・$1促銷');
       console.log(`• ${message.url ? `[${title}](${message.url})` : title}`);
+      // Its dates, from the alert's second line ("10/30–11/02・直飛"): a promotion is for certain days.
+      const when = /(\d\d)\/(\d\d)–(\d\d)\/(\d\d)/.exec(message.body ?? '');
+      if (when) {
+        // The alert names no year: the next such date from today.
+        const iso = (month: string, day: string) => {
+          const year = new Date().getUTCFullYear();
+          const thisYear = `${year}-${month}-${day}`;
+          return Date.parse(`${thisYear}T00:00:00Z`) >= Date.now() - 86_400_000 ? thisYear : `${year + 1}-${month}-${day}`;
+        };
+        console.log(dateRange(iso(when[1]!, when[2]!), iso(when[3]!, when[4]!)));
+      }
     }
   }
   keyboard.push([FLIGHT_LIST_BUTTON]);
@@ -184,7 +199,7 @@ const NEARBY_PER_AREA = 2;
 const GOOD_RATING = 3.5;
 
 type Stay = { city: string; outboundDate: string; returnDate: string };
-type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos; warning?: string };
+type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos; warning?: string; area?: string };
 const isGood = (hotel: { rating: number | null }) => hotel.rating !== null && hotel.rating >= GOOD_RATING;
 
 /**
@@ -233,7 +248,7 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
   const good = rooms.filter(isGood).sort((a, b) => a.nightly - b.nightly);
   const rest = rooms.filter(hotel => !good.includes(hotel)).sort((a, b) => a.nightly - b.nightly);
   const candidates = [...good, ...rest].slice(0, candidatesWanted);
-  const { rooms: checks, ratings, sites, photos } = await checkHotelRooms(watch, stay, candidates.map(hotel => hotel.name));
+  const { rooms: checks, ratings, sites, photos, addresses } = await checkHotelRooms(watch, stay, candidates.map(hotel => hotel.name));
   const rated = candidates.map(hotel => {
     const found = ratings.get(hotel.name);
     return { ...hotel, rating: hotel.rating ?? found?.score ?? null,
@@ -247,6 +262,9 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     // its cheapest private room.
     const quoted = recommendedSite(sites.get(hotel.name) ?? [])?.nightly ?? hotel.nightly;
     if (check?.status !== 'private') return [];
+    // Out of town (Okinawa City for Naha, Kawaguchi for Tokyo) is too far to stay; the user found four such of six.
+    const address = addresses.get(hotel.name);
+    if (address && !inTown(stay.city, hotelArea(address).postcode)) return [];
     // Smoking rooms are left out when the user minds the smell; a hotel with nothing else goes.
     const options = check.options.filter(option => !(nonSmoking && isSmokingRoom(option.name)));
     if (!options.length) return [];
@@ -263,10 +281,12 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     const room = options[0]!;
     return [{ hotel, room, nightly: check.alsoShared || room !== check.room ? Math.max(room.nightly, quoted) : quoted }];
   }).sort((a, b) => Number(!isGood(a.hotel)) - Number(!isGood(b.hotel)) || a.nightly - b.nightly);
+  const areaOf = (name: string) => { const address = addresses.get(name); return address ? hotelArea(address).label : undefined; };
   const unconfirmed = rated.filter(hotel => checks.get(hotel.name)?.status === 'unknown');
   const picks: Pick[] = [
-    ...verified.map(({ hotel, room, nightly }) => ({ hotel, nightly, note: `✅ ${roomType(room.name)}`, sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name) })),
-    ...unconfirmed.map(hotel => ({ hotel, nightly: hotel.nightly, note: '❔ 房型未確認', sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name) })),
+    ...verified.map(({ hotel, room, nightly }) => ({ hotel, nightly, note: `✅ ${roomType(room.name)}`, sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name), area: areaOf(hotel.name) })),
+    ...unconfirmed.filter(hotel => { const address = addresses.get(hotel.name); return !address || inTown(stay.city, hotelArea(address).postcode); })
+      .map(hotel => ({ hotel, nightly: hotel.nightly, note: '❔ 房型未確認', sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name), area: areaOf(hotel.name) })),
   ].slice(0, limit);
   return { picks, shared };
 }
@@ -275,7 +295,7 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
 function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPrice: number, currency: string, country: string, start = 1) {
   // The user's format (2026-10-18): name, photos, rating and room type, the nightly price at the one
   // recommended site with its link, then the totals. No cancellation terms, labels or room price gaps.
-  picks.forEach(({ hotel, nightly: listNightly, note, sites, photos, warning }, index) => {
+  picks.forEach(({ hotel, nightly: listNightly, note, sites, photos, warning, area }, index) => {
     // One price: what the linked site charges, but never under the pick's own price, which may be
     // for a bigger room than the site's cheapest offer (a room for two rather than a single); the
     // link then goes to a site asking about that price.
@@ -292,9 +312,11 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     console.log(`${start + index}. [${hotel.name}](${url})`);
     // "私人房" only means the site named no type; it says nothing, so leave it out.
     const type = note.replace(/^✅ /, '');
-    console.log([hotel.rating !== null ? `⭐${hotel.rating}` : null, type === '私人房' ? null : type, hotel.publicBath ? '♨️大浴場' : null].filter(Boolean).join('・'));
+    for (const line of phoneLines([hotel.rating !== null ? `⭐${hotel.rating.toFixed(1)}` : null, type === '私人房' ? null : type,
+      hotel.publicBath ? '♨️大浴場' : null, area ? `📍${area}` : null])) console.log(line);
     if (warning) console.log(warning);
-    const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : '';
+    // Every hotel gets a link to book or compare: Google's own page when it named no site for it.
+    const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : `\n在 [Google](${url}) 看價格`;
     console.log(`每晚含稅 ${money(nightly, currency)}${booking}${saving > 0 ? `\n🏷 比平常省 ${money(saving, currency)}／晚` : ''}`);
     if (travelers === 1) console.log(`${nights}晚 ${money(cost.stay, currency)}・含機票 ${money(cost.total, currency)}`);
     else {
@@ -361,7 +383,7 @@ async function hotelsFor(code: string | undefined, nearby = false) {
 
   if (nearby) {
     const areas = nearbyAreas(row.city);
-    console.log(`🏨 *${cityLabel(row.city)} 周邊住宿*\n${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚\n${flightLine}`);
+    console.log(`🏨 *${cityLabel(row.city)} 周邊住宿*\n${dateRange(row.outboundDate, row.returnDate)}・${nights} 晚\n${flightLine}`);
     if (!areas.length) {
       console.log(`\n${cityLabel(row.city)} 沒有設定周邊住宿區域，市區的選擇已經是主要選項。`);
       return;
@@ -378,7 +400,7 @@ async function hotelsFor(code: string | undefined, nearby = false) {
     return;
   }
 
-  console.log(`🏨 *${cityLabel(row.city)} 住宿*\n${md(row.outboundDate)}–${md(row.returnDate)}・${nights} 晚`);
+  console.log(`🏨 *${cityLabel(row.city)} 住宿*\n${dateRange(row.outboundDate, row.returnDate)}・${nights} 晚`);
   const prefs = readUserPrefs();
   // The flights are worked out beside the hotel checks, so they add no wait.
   const [result, perFare] = await Promise.all([
@@ -414,8 +436,9 @@ function readUserPrefs(): Prefs {
 }
 
 const cachedBooking = (origin: string, stay: Stay, currency: string, country: string, prefs: Prefs) =>
-  cached('booking', [origin, stay, currency, country, prefs], () => bookFlight(origin, stay, currency, country, {
-    outbound: flights => chooseFlight(flights, prefs), inbound: (flights, airline) => chooseReturn(flights, airline, prefs) }));
+  cached('booking', [origin, stay, currency, country, prefs, 'per-city times, short trips'], () => bookFlight(origin, stay, currency, country, {
+    outbound: flights => chooseFlight(flights, prefs, stay.city, nightsOf(stay)),
+    inbound: (flights, airline) => chooseReturn(flights, airline, prefs, stay.city, nightsOf(stay)) }));
 
 /**
  * A hotel with a public bath files the bath and its shared washrooms under Google's "Bathroom"
@@ -478,18 +501,21 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
   const legLink = (url: string | null | undefined) => url ? withAdults(url, travelers) : booking.url;
   const separate = buy.chosen.separateTickets;
   // When the party reaches the hotel and must leave it, against its usual check-in and check-out.
-  const arrival = atHotel(booking.outbound);
-  const leave = leavesHotel(booking.inbound);
+  const arrival = atHotel(booking.outbound, row.city);
+  const leave = leavesHotel(booking.inbound, row.city);
   console.log(`✈️ [去 ${legs(booking.outbound)}](${separate ? legLink(booking.legLinks?.outbound) : booking.url})`);
-  console.log(`${fitsCheckIn(booking.outbound) ? '' : '⚠️ '}飛 ${shortDuration(booking.outbound.duration)}・約 ${clock(arrival)} 到飯店`);
+  console.log(`${fitsCheckIn(booking.outbound, row.city) ? '' : '⚠️ '}飛 ${shortDuration(booking.outbound.duration)}・約 ${clock(arrival)} 到飯店`);
   console.log(separate ? `[回 ${legs(booking.inbound)}](${legLink(booking.legLinks?.inbound)})` : `回 ${legs(booking.inbound)}`);
-  console.log(`${fitsCheckOut(booking.inbound, prefs) ? '' : '⚠️ '}飛 ${shortDuration(booking.inbound.duration)}・${clock(leave)} 離開飯店`);
+  console.log(`${fitsCheckOut(booking.inbound, prefs, row.city) ? '' : '⚠️ '}飛 ${shortDuration(booking.inbound.duration)}・${clock(leave)} 離開飯店`);
   console.log(`飯店 ${prefs.hotelCheckIn} 入住・${prefs.hotelCheckOut} 退房`);
   const bagged = prefs.checkedBag && (booking.outbound.lowCost || booking.inbound.lowCost);
   console.log(`來回每人 ${money(buy.chosen.price, currency)}${bagged ? `\n＋托運行李約 ${money(prefs.bagFeeEstimate, currency)}（估算）` : ''}`);
+  // A short trip may buy more time there: say what it costs over the cheapest fare for those dates.
+  const forTime = buy.chosen.price - row.price;
+  if (nightsOf(stay) <= SHORT_TRIP_NIGHTS && forTime > 0) console.log(`早去晚回・比最便宜多 ${money(forTime, currency)}`);
   const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
   if (separate) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);
-  else console.log(`一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
+  else console.log(`去回同一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
   return buy.chosen.price + (bagged ? prefs.bagFeeEstimate : 0);
 }
 
@@ -521,7 +547,6 @@ function scanNow() {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const FLIGHTS_IN_TRIP = 5;
 
 /** "大阪" or "Osaka" → "Osaka": Google's English name, from the Chinese names the bot shows. */
 function cityName(input: string): string | null {
@@ -548,16 +573,18 @@ async function tripSearch(cityArg: string | undefined, outboundDate: string | un
   const stay: Stay = { city, outboundDate, returnDate };
   const found = await cachedFlights(origin, stay, currency, country);
   const nights = nightsOf(stay);
-  console.log(`✈️ *${watch?.originLabel ?? '台北'} → ${cityLabel(city)}*\n${md(outboundDate)}–${md(returnDate)}・${nights} 晚・來回`);
+  console.log(`✈️ *${watch?.originLabel ?? '台北'} → ${cityLabel(city)}*\n${dateRange(outboundDate, returnDate)}・${nights} 晚・來回`);
   if (!found?.flights.length) {
     console.log('\n這次沒讀到航班（Google 可能暫時擋住或這條航線沒有航班），可以稍後再試。');
     keyboard = [[FLIGHT_LIST_BUTTON]];
     return;
   }
-  const amount = found.market?.versusUsual?.replace(/^(\S+) cheaper$/, '比平常便宜 $1').replace(/^(\S+) more expensive$/, '比平常貴 $1');
-  console.log(`📊 Google：${found.market ? MARKET_TEXT[found.market.level].replace(/（.*）/, '') : '沒讀到'}${amount ? `\n${amount}` : ''}`);
-  console.log(`\n${flightLines(found.flights, currency, FLIGHTS_IN_TRIP).join('\n')}`);
+  // The same plan as for a scanned option (2026-10-19: this list had no pair, no booking links, no
+  // return times, and led with a flight landing after the last train): the pair that fits, each leg
+  // linked, with when the party reaches and leaves the hotel.
   const cheapest = found.flights[0]!;
+  await printFlightPlan({ origin, currency, country, id: null, lastScanAt: null },
+    { city, outboundDate, returnDate, price: cheapest.price, stops: cheapest.stops, currency }, stay, readUserPrefs());
   writeFileSync(LAST_TRIP_FILE, `${JSON.stringify({ origin, currency, country, city, outboundDate, returnDate, price: cheapest.price, stops: cheapest.stops }, null, 2)}\n`);
   console.log(`\n[在 Google Flights 看全部航班](${buildCardSearchUrl(origin, { city, outboundDate, returnDate }, currency)})`);
   console.log(travelers > 1 ? `每人來回價（${travelers} 人同行）・行李另計` : '1 人來回價・行李另計');
@@ -930,6 +957,9 @@ async function checkAll() {
   const entries = [...new Set((await activeWatches()).filter(({ watch }) => watch.lastScanAt).map(({ letter }) => letter))];
   const runs: string[][] = [['report', 'all', '--limit', '5'], ...entries.map(letter => ['hotels-for', `${letter}1`])];
   if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', '1'], ['rooms', '2']);
+  // A dated trip as the user would ask for one: Osaka, five nights, two months out.
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  runs.push(['trip', '大阪', day(60), day(65)]);
   let failures = 0;
   for (const run of runs) {
     const result = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, ...run, '--check'], { encoding: 'utf8', timeout: 600_000 });

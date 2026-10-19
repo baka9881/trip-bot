@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDormBed, isNonSmokingRoom, isSmokingRoom, parseGoogleRoomRow, roomKey, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
+import { hotelArea, inTown, isDormBed, isNonSmokingRoom, isSmokingRoom, parseGoogleRoomRow, roomKey, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
 
 // Excerpt captured from a live Google Hotels search (Okinawa, Nov 1-7 2026, hl=en, curr=TWD).
 const LIVE = `Skip to main content
@@ -303,17 +303,17 @@ describe('summarizeHotels', () => {
 describe('hotel search URLs', () => {
   it('builds a dated Google Hotels search and rejects odd input', () => {
     const url = new URL(buildHotelSearchUrl({ city: 'Okinawa', checkIn: '2026-11-01', checkOut: '2026-11-07', currency: 'TWD', country: 'TW' }));
-    expect(url.searchParams.get('q')).toBe('cheap 3 star hotels in Okinawa from 2026-11-01 to 2026-11-07');
+    expect(url.searchParams.get('q')).toBe('cheap 3 star hotels in Naha from 2026-11-01 to 2026-11-07');
     expect(() => buildHotelSearchUrl({ city: 'Okinawa&x=1', checkIn: '2026-11-01', checkOut: '2026-11-07', currency: 'TWD', country: 'TW' })).toThrow();
   });
 
   it('keeps the stay dates when linking one hotel, by leading with "hotels in <city> from … to …"', () => {
     const one = new URL(buildHotelNameUrl({ name: 'Rycom Crystal Hotel', city: 'Okinawa', checkIn: '2026-10-29', checkOut: '2026-11-05', currency: 'TWD', country: 'TW' }));
-    expect(one.searchParams.get('q')).toBe('hotels in Okinawa from 2026-10-29 to 2026-11-05 Rycom Crystal Hotel');
+    expect(one.searchParams.get('q')).toBe('hotels in Naha from 2026-10-29 to 2026-11-05 Rycom Crystal Hotel');
     expect(one.searchParams.get('hl')).toBe('zh-TW');
     expect(one.searchParams.get('gl')).toBe('TW');
     const all = new URL(buildHotelNameUrl({ city: 'Okinawa', checkIn: '2026-10-29', checkOut: '2026-11-05', currency: 'TWD' }));
-    expect(all.searchParams.get('q')).toBe('cheap 3 star hotels in Okinawa from 2026-10-29 to 2026-11-05');
+    expect(all.searchParams.get('q')).toBe('cheap 3 star hotels in Naha from 2026-10-29 to 2026-11-05');
     expect(() => buildHotelNameUrl({ city: 'Okinawa', checkIn: 'tomorrow', checkOut: '2026-11-05', currency: 'TWD' })).toThrow();
   });
 
@@ -396,5 +396,19 @@ describe('dorm beds', () => {
     expect(parseGoogleRoomRow('Standard Semi-Double Room1 single bed ·')).toEqual({ name: 'Standard Semi-Double Room', beds: ['1 single bed'], nightly: null, stayTotal: null, guests: null });
     expect(parseGoogleRoomRow('Cozy Room for 1 Adult - Non-Smoking').guests).toBe(1);
     expect(roomKey('Cozy Room for 2 Adults - Non-Smoking')).toBe(roomKey('Cozy Room (for 2 Adults), Non Smoking'));
+  });
+
+  // 2026-10-19: four of six "Okinawa" hotels were in Okinawa City and Uruma, an hour from Naha.
+  it('says where a hotel is and whether it is in town', () => {
+    const koza = hotelArea('2 Chome-1-29 Uechi, Okinawa, 904-0031, Japan');
+    expect(koza).toEqual({ label: '沖繩市', postcode: 904 });
+    expect(inTown('Okinawa', koza.postcode)).toBe(false);
+    const asakusa = hotelArea('3 Chome-7-11 Kotobuki, Taito City, Tokyo 111-0042, Japan');
+    expect(asakusa).toEqual({ label: '台東區', postcode: 111 });
+    expect(inTown('Tokyo', asakusa.postcode)).toBe(true);
+    expect(inTown('Tokyo', hotelArea('1 Chome-1 Sakaecho, Kawaguchi, Saitama 332-0017, Japan').postcode)).toBe(false);
+    expect(inTown('Tokyo', hotelArea('8-1 Asahicho, Hachioji, Tokyo 192-0083, Japan').postcode)).toBe(false);
+    expect(hotelArea('2 Chome-6-1 Matsuyama, Naha, Okinawa 900-0032, Japan').label).toBe('那霸');
+    expect(inTown('Miyazaki', 880)).toBe(true); // no bounds known
   });
 });

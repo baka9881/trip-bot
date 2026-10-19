@@ -47,9 +47,29 @@ describe('preferences', () => {
     const late = { ...flight('Peach', 5000, '19:00', true), arrives: '23:20' };
     const evening = { ...flight('Scoot', 5300, '14:25', true), arrives: '18:30' };
     expect(chooseFlight([late, evening], DEFAULT_PREFS)?.airline).toBe('Scoot');
-    expect(clock(atHotel(evening))).toBe('21:00');
-    expect(clock(leavesHotel(noon))).toBe('08:40');
+    expect(clock(atHotel(evening, 'Tokyo'))).toBe('21:00');
+    expect(clock(leavesHotel(noon, 'Tokyo'))).toBe('08:40');
     expect(fitsCheckOut(early, DEFAULT_PREFS)).toBe(false);
+  });
+
+  // Naha's airport is fifteen minutes from town (2026-10-19: 18:30 read as 21:00 at the hotel).
+  it('times the ride to and from the hotel by destination', () => {
+    const lion = { ...flight('Thai Lion Air', 5304, '16:10', true), arrives: '18:30' };
+    expect(clock(atHotel(lion, 'Okinawa'))).toBe('19:45');
+    expect(clock(atHotel(lion, 'Tokyo'))).toBe('21:00');
+    expect(clock(leavesHotel(flight('Thai Lion Air', 5304, '12:10', true), 'Okinawa'))).toBe('09:40');
+  });
+
+  // A weekend in Okinawa flew out at 16:10 on Saturday (2026-10-19).
+  it('buys more time on a short trip for a little more money', () => {
+    const morning = { ...flight('Peach', 6200, '07:30', true), arrives: '09:50' };
+    const afternoon = { ...flight('Thai Lion Air', 5304, '16:10', true), arrives: '18:30' };
+    expect(chooseFlight([afternoon, morning], DEFAULT_PREFS, 'Okinawa', 2)?.airline).toBe('Peach');
+    expect(chooseFlight([afternoon, morning], DEFAULT_PREFS, 'Okinawa', 6)?.airline).toBe('Thai Lion Air');
+    const early = flight('Peach', 5000, '11:00', true);
+    const late = flight('Thai Lion Air', 5900, '19:30', true);
+    expect(chooseReturn([early, late], 'Peach', DEFAULT_PREFS, 'Okinawa', 2)?.departs).toBe('19:30');
+    expect(chooseReturn([early, late], 'Peach', DEFAULT_PREFS, 'Okinawa', 6)?.departs).toBe('11:00');
   });
 
   it('pairs the cheapest return, the same airline only within the one-ticket premium', () => {

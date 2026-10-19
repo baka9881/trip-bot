@@ -298,7 +298,7 @@ export function summarizeHotels(hotels: readonly HotelListQuote[], checkIn: stri
   };
 }
 
-const PLACE = /^[\p{L}][\p{L} .'-]{0,48}$/u;
+const PLACE = /^[\p{L}][\p{L}\d .'-]{0,48}$/u; // "Tokyo 23 wards"
 
 // "cheap 3 star hotels in …" makes Google apply its 3-star filter: rooms, not the
 // hostel beds Google files under two stars, and the query keeps the stay dates.
@@ -326,6 +326,52 @@ const NEARBY_AREAS: Record<string, NearbyArea[]> = {
   Sapporo: [{ area: 'Otaru', label: '小樽', ride: '到札幌站電車約 35 分鐘' }],
 };
 
+/**
+ * What to search for a destination's hotels. A destination named for its airport or prefecture
+ * ("Okinawa") brings hotels an hour from town (2026-10-19: Koza, Uruma); search the city instead.
+ */
+const SEARCH_AREAS: Record<string, string> = { Okinawa: 'Naha', Tokyo: 'Tokyo 23 wards' };
+export const searchArea = (city: string) => SEARCH_AREAS[city] ?? city;
+
+/**
+ * Where a destination's town is, by the first three digits of Japanese postal codes: Tokyo's 23 wards,
+ * Naha, Osaka, Kyoto, Nagoya, Fukuoka and Sapporo cities. A hotel elsewhere is too far to stay without
+ * a car or a long train ride; destinations not listed take any hotel.
+ */
+const CITY_POSTCODES: Record<string, readonly [number, number][]> = {
+  Tokyo: [[100, 179]], Okinawa: [[900, 900], [902, 902]], Naha: [[900, 900], [902, 902]], Osaka: [[530, 559]],
+  Kyoto: [[600, 616]], Nagoya: [[450, 468]], Fukuoka: [[810, 819]], Sapporo: [[1, 7], [60, 65]],
+};
+
+/** Common place names in Chinese; anything else stays as Google wrote it. */
+const PLACE_NAMES: Record<string, string> = {
+  Chiyoda: '千代田區', Chuo: '中央區', Minato: '港區', Shinjuku: '新宿區', Bunkyo: '文京區', Taito: '台東區', Sumida: '墨田區',
+  Koto: '江東區', Shinagawa: '品川區', Meguro: '目黑區', Ota: '大田區', Setagaya: '世田谷區', Shibuya: '澀谷區', Nakano: '中野區',
+  Suginami: '杉並區', Toshima: '豐島區', Kita: '北區', Arakawa: '荒川區', Itabashi: '板橋區', Nerima: '練馬區', Adachi: '足立區',
+  Katsushika: '葛飾區', Edogawa: '江戶川區', Naha: '那霸', Okinawa: '沖繩市', Uruma: '宇流麻', Ginowan: '宜野灣', Urasoe: '浦添',
+  Tomigusuku: '豐見城', Chatan: '北谷', Yomitan: '讀谷', Naniwa: '浪速區', Nishi: '西區', Yodogawa: '淀川區', Tennoji: '天王寺區',
+  Higashiosaka: '東大阪', Sakai: '堺', Kawaguchi: '川口', Hachioji: '八王子', Kawasaki: '川崎', Yokohama: '橫濱', Chiba: '千葉',
+};
+
+/** A hotel's town or ward from Google's address ("2 Chome-1-29 Uechi, Okinawa, 904-0031, Japan" → 沖繩市) and its postal code. */
+export function hotelArea(address: string): { label: string; postcode: number | null } {
+  const postal = /(\d{3})-\d{4}/.exec(address);
+  // The town comes right before the part holding the postal code: "Naha, Okinawa 900-0032" (that part
+  // leads with the prefecture) or "Okinawa, 904-0031" (the code alone).
+  const parts = address.replace(/,?\s*Japan\s*$/, '').split(/,\s*/);
+  const postalAt = parts.findIndex(part => /\d{3}-\d{4}/.test(part));
+  const town = (postalAt > 0 ? parts[postalAt - 1] : parts.at(-1)) ?? '';
+  const named = parts.find(part => /\b(City|Ward)$|-(ku|shi)$/i.test(part.trim())) ?? town;
+  const place = named.replace(/\s+(City|Ward)$|-(ku|shi)$/i, '');
+  return { label: PLACE_NAMES[place] ?? place, postcode: postal ? Number(postal[1]) : null };
+}
+
+/** Whether a hotel is in its destination's town; true when the destination has no known bounds or the address no postal code. */
+export function inTown(city: string, postcode: number | null): boolean {
+  const ranges = CITY_POSTCODES[city];
+  return !ranges || postcode === null || ranges.some(([low, high]) => postcode >= low && postcode <= high);
+}
+
 export function nearbyAreas(city: string): NearbyArea[] {
   return NEARBY_AREAS[city] ?? [];
 }
@@ -335,7 +381,7 @@ export function buildHotelSearchUrl(params: { city: string; checkIn: string; che
     throw new Error('Invalid hotel search');
   }
   const url = new URL('https://www.google.com/travel/search');
-  url.searchParams.set('q', `${LIST_QUERY} ${params.city} from ${params.checkIn} to ${params.checkOut}`);
+  url.searchParams.set('q', `${LIST_QUERY} ${searchArea(params.city)} from ${params.checkIn} to ${params.checkOut}`);
   url.searchParams.set('hl', 'en');
   url.searchParams.set('curr', params.currency);
   url.searchParams.set('gl', params.country);
@@ -351,8 +397,8 @@ export function buildHotelNameUrl(params: { name?: string; city: string; checkIn
   if (!/^\d{4}-\d{2}-\d{2}$/.test(params.checkIn) || !/^\d{4}-\d{2}-\d{2}$/.test(params.checkOut)) throw new Error('Invalid hotel dates');
   const url = new URL('https://www.google.com/travel/search');
   // One hotel: "hotels in" keeps it first. The whole list: the same cheap 3-star search the tool used.
-  const query = params.name ? `hotels in ${params.city} from ${params.checkIn} to ${params.checkOut} ${params.name.slice(0, 120)}`
-    : `${LIST_QUERY} ${params.city} from ${params.checkIn} to ${params.checkOut}`;
+  const query = params.name ? `hotels in ${searchArea(params.city)} from ${params.checkIn} to ${params.checkOut} ${params.name.slice(0, 120)}`
+    : `${LIST_QUERY} ${searchArea(params.city)} from ${params.checkIn} to ${params.checkOut}`;
   url.searchParams.set('q', query);
   url.searchParams.set('hl', params.language ?? 'zh-TW');
   url.searchParams.set('curr', params.currency);

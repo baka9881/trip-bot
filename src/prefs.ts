@@ -66,25 +66,34 @@ export function comparableFare(flight: Pick<FlightOption, 'price' | 'lowCost'>, 
 const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 export const clock = (total: number) => `${String(Math.floor(((total % 1440) + 1440) % 1440 / 60)).padStart(2, '0')}:${String(((total % 60) + 60) % 60).padStart(2, '0')}`;
 
-// Landing to the hotel door: immigration, bags and the train into town. Hotel door to take-off:
-// the train back and two hours at the airport for an international flight.
-const LANDING_TO_HOTEL = 150;
-const HOTEL_TO_TAKEOFF = 210;
+/**
+ * Minutes from landing to the hotel door (immigration, bags, the ride into town) and from the hotel
+ * door to take-off (the ride back, two hours at the airport), by destination. Naha's airport is
+ * fifteen minutes from town, Narita over an hour (2026-10-19: one figure for all read 21:00 for a
+ * Naha arrival the user would make by 19:30).
+ */
+const TRANSFERS: Record<string, readonly [number, number]> = {
+  Okinawa: [75, 150], Naha: [75, 150], Ishigaki: [75, 150], Miyako: [75, 150], Fukuoka: [75, 150],
+  Tokyo: [150, 210], Osaka: [120, 180], Nagoya: [120, 180], Sapporo: [120, 180],
+};
+const DEFAULT_TRANSFER: readonly [number, number] = [120, 180];
+const transfer = (city: string | undefined) => (city && TRANSFERS[city]) || DEFAULT_TRANSFER;
+
 // Reach the hotel by 23:30 (last trains, front desks); leave it no more than three hours before check-out.
 const LATEST_AT_HOTEL = minutes('23:30');
 const EARLIEST_BEFORE_CHECKOUT = 180;
 
 /** When the party reaches the hotel after this outbound flight lands, in minutes after midnight ("+1" adds a day). */
-export const atHotel = (flight: Pick<FlightOption, 'arrives'>) =>
-  minutes(flight.arrives) + (/\+1/.test(flight.arrives) ? 1440 : 0) + LANDING_TO_HOTEL;
+export const atHotel = (flight: Pick<FlightOption, 'arrives'>, city?: string) =>
+  minutes(flight.arrives) + (/\+1/.test(flight.arrives) ? 1440 : 0) + transfer(city)[0];
 
 /** When the party must leave the hotel for this return flight, in minutes after midnight. */
-export const leavesHotel = (flight: Pick<FlightOption, 'departs'>) => minutes(flight.departs) - HOTEL_TO_TAKEOFF;
+export const leavesHotel = (flight: Pick<FlightOption, 'departs'>, city?: string) => minutes(flight.departs) - transfer(city)[1];
 
 /** An outbound that reaches the hotel the same evening; a return that does not get the party up before dawn. */
-export const fitsCheckIn = (flight: Pick<FlightOption, 'arrives'>) => atHotel(flight) <= LATEST_AT_HOTEL;
-export const fitsCheckOut = (flight: Pick<FlightOption, 'departs'>, prefs: Pick<Prefs, 'hotelCheckOut'>) =>
-  leavesHotel(flight) >= minutes(prefs.hotelCheckOut) - EARLIEST_BEFORE_CHECKOUT;
+export const fitsCheckIn = (flight: Pick<FlightOption, 'arrives'>, city?: string) => atHotel(flight, city) <= LATEST_AT_HOTEL;
+export const fitsCheckOut = (flight: Pick<FlightOption, 'departs'>, prefs: Pick<Prefs, 'hotelCheckOut'>, city?: string) =>
+  leavesHotel(flight, city) >= minutes(prefs.hotelCheckOut) - EARLIEST_BEFORE_CHECKOUT;
 
 /** The cheapest of the flights that suit the stay, else of all of them: a recommendation either way. */
 const cheapestSuiting = (flights: readonly FlightOption[], suits: (flight: FlightOption) => boolean, prefs: Prefs) => {
@@ -92,12 +101,26 @@ const cheapestSuiting = (flights: readonly FlightOption[], suits: (flight: Fligh
   return sorted.filter(suits).length ? sorted.filter(suits) : sorted;
 };
 
+// A trip of three nights or fewer is short enough that half a day counts: pay up to this much more for
+// an earlier outbound or a later return (2026-10-19: a weekend in Okinawa flew out at 16:10 Saturday).
+export const SHORT_TRIP_NIGHTS = 3;
+export const MORE_TIME_PREMIUM = 1500;
+
+/** On a short trip, the flight that gives the most time there among those within the premium of the cheapest. */
+const mostTime = (sorted: readonly FlightOption[], prefs: Prefs, nights: number | undefined, later: (a: FlightOption, b: FlightOption) => number) => {
+  const cheapest = sorted[0];
+  if (!cheapest || nights === undefined || nights > SHORT_TRIP_NIGHTS) return cheapest ?? null;
+  return sorted.filter(flight => comparableFare(flight, prefs) - comparableFare(cheapest, prefs) <= MORE_TIME_PREMIUM).sort(later)[0] ?? cheapest;
+};
+
 /**
  * The outbound flight to recommend: in the departure window, reaching the hotel the same evening,
- * cheapest once bag fees are counted (the user asked for check-in and check-out to count, 2026-10-19).
+ * cheapest once bag fees are counted (the user asked for check-in and check-out to count, 2026-10-19);
+ * on a short trip the earliest arrival within MORE_TIME_PREMIUM of that.
  */
-export function chooseFlight(flights: readonly FlightOption[], prefs: Prefs): FlightOption | null {
-  return cheapestSuiting(flights.filter(flight => departsInWindow(flight.departs, prefs)), fitsCheckIn, prefs)[0] ?? null;
+export function chooseFlight(flights: readonly FlightOption[], prefs: Prefs, city?: string, nights?: number): FlightOption | null {
+  const sorted = cheapestSuiting(flights.filter(flight => departsInWindow(flight.departs, prefs)), flight => fitsCheckIn(flight, city), prefs);
+  return mostTime(sorted, prefs, nights, (a, b) => atHotel(a, city) - atHotel(b, city));
 }
 
 /**
@@ -113,10 +136,12 @@ export function chooseBookingOption<T extends { separateTickets: boolean; price:
 }
 
 /** The return to pair with an outbound: in the window, cheapest, preferring the same airline (one ticket). */
-export function chooseReturn(returns: readonly FlightOption[], outboundAirline: string, prefs: Prefs): FlightOption | null {
-  const allowed = cheapestSuiting(returns.filter(flight => departsInWindow(flight.departs, prefs)), flight => fitsCheckOut(flight, prefs), prefs);
-  const cheapest = allowed[0];
+export function chooseReturn(returns: readonly FlightOption[], outboundAirline: string, prefs: Prefs, city?: string, nights?: number): FlightOption | null {
+  const allowed = cheapestSuiting(returns.filter(flight => departsInWindow(flight.departs, prefs)), flight => fitsCheckOut(flight, prefs, city), prefs);
+  // On a short trip the latest return within the premium; otherwise the cheapest.
+  const cheapest = mostTime(allowed, prefs, nights, (a, b) => leavesHotel(b, city) - leavesHotel(a, city));
   if (!cheapest) return null;
   const sameAirline = allowed.find(flight => flight.airline === outboundAirline);
-  return sameAirline && comparableFare(sameAirline, prefs) - comparableFare(cheapest, prefs) <= prefs.oneTicketPremium ? sameAirline : cheapest;
+  return sameAirline && comparableFare(sameAirline, prefs) - comparableFare(cheapest, prefs) <= prefs.oneTicketPremium
+    && (nights === undefined || nights > SHORT_TRIP_NIGHTS || leavesHotel(sameAirline, city) >= leavesHotel(cheapest, city)) ? sameAirline : cheapest;
 }

@@ -34,3 +34,10 @@ test('a percent sign inside a link is not a percentage', () => {
   const linked = hotel(['1. [APA](https://g)', '每晚含稅 NT$3,490', '在 [Booking](https://b?x%3D1) 訂']);
   assert.deepEqual(checkOutput([plan, linked], keyboard, context), []);
 });
+
+test('dates carry weekdays and ratings a decimal', () => {
+  const problems = checkOutput([plan, good, { text: '10/31–11/02・≈ 平常價\n⭐4・雙人房', photos: [] }], keyboard, context).join('\n');
+  assert.match(problems, /星期幾/);
+  assert.match(problems, /小數/);
+  assert.deepEqual(checkOutput([plan, good, { text: '10/31(六)–11/02(一)・≈ 平常價\n⭐4.0・雙人房', photos: [] }], keyboard, context), []);
+});

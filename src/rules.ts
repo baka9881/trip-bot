@@ -81,6 +81,10 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
     }
   }
 
+  // Dates with their weekdays (2026-10-19), ratings with one decimal ("⭐4" read oddly, 2026-10-19).
+  for (const line of shown) if (/\d\d\/\d\d–\d\d\/\d\d/.test(line)) problems.push(`日期沒有星期幾：${line}`);
+  for (const line of shown) if (/⭐\d(?![.\d])/.test(line)) problems.push(`評分沒有小數：${line}`);
+
   // Each room type once in the room photos (2026-10-19: Google's rows listed one room per site).
   const roomNames = lines.filter((line, index) => /^🛏 /.test(lines[index - 1] ?? ''));
   for (const name of new Set(roomNames.filter((name, index) => roomNames.indexOf(name) !== index))) problems.push(`房型重複：${name}`);
