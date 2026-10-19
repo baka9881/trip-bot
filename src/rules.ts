@@ -24,7 +24,11 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
   const shown = lines.map(line => line.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1'));
 
   // Phone layout (2026-10-18, 2026-10-19 twice): no line wraps on a phone.
-  lines.forEach((line, index) => { if (!SHOWN_NAME.test(line) && phoneWidth(line) > PHONE_WIDTH) problems.push(`手機會折行：${shown[index]}`); });
+  // The line under a room type ("🛏 *雙人房*") is the site's own room name, which may wrap too.
+  lines.forEach((line, index) => {
+    const roomName = /^🛏 /.test(lines[index - 1] ?? '');
+    if (!SHOWN_NAME.test(line) && !roomName && phoneWidth(line) > PHONE_WIDTH) problems.push(`手機會折行：${shown[index]}`);
+  });
 
   // Amounts, not percentages (2026-10-17).
   for (const line of shown) if (/\d\s?%/.test(line)) problems.push(`用了百分比：${line}`);
@@ -76,6 +80,10 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
     if (seen.has(name)) problems.push(`${name}：清單裡重複出現`);
     seen.add(name);
     if (!segment.photos.length) problems.push(`${name}：沒有照片`);
+    // No shared bathroom or bunk beds in a list (2026-10-18, 2026-10-19: poor value for two).
+    if (hotelLines.some(line => /^⭐.*(共用衛浴|上下鋪)|上下鋪/.test(line))) problems.push(`${name}：共用衛浴或上下鋪`);
+    // Where it is (2026-10-19: hotels an hour out of town, and one in Saitama listed as Tokyo).
+    if (!hotelLines.some(line => /📍/.test(line))) problems.push(`${name}：沒有標地區`);
     if (!hotelLines.some(line => /^在 \[[^\]]+\]\(/.test(line))) problems.push(`${name}：沒有訂房連結`);
     const nightly = amount(hotelLines.find(line => /^每晚含稅 /.test(line)));
     const stayLine = hotelLines.find(line => /^\d+晚( \d+間)? NT\$/.test(line));
@@ -99,6 +107,14 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
   // Each room type once in the room photos (2026-10-19: Google's rows listed one room per site).
   const roomNames = lines.filter((line, index) => /^🛏 /.test(lines[index - 1] ?? ''));
   for (const name of new Set(roomNames.filter((name, index) => roomNames.indexOf(name) !== index))) problems.push(`房型重複：${name}`);
+
+  // Cheapest first, the value order the user asked for (2026-10-19: NT$2,980 listed above NT$2,238).
+  // A nearby list restarts the order in each area.
+  if (!/周邊住宿/.test(text)) {
+    const nightlies = segments.filter(segment => HOTEL_LINE.test(segment.text.split('\n')[0] ?? ''))
+      .map(segment => amount(segment.text.split('\n').find(line => /^每晚含稅 /.test(line))) ?? 0);
+    if (nightlies.some((price, index) => index > 0 && price < nightlies[index - 1]!)) problems.push(`住宿沒有照價格排：${nightlies.join(' → ')}`);
+  }
 
   // Every listed hotel has its room-photo button (2026-10-19: hotel 3 of 5 had none).
   const buttons = keyboard.flat();

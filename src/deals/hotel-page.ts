@@ -12,6 +12,8 @@ export interface HotelListQuote {
    * bathrooms. Google files its photos under "Bathroom", which read as a shared bathroom.
    */
   publicBath?: boolean;
+  /** Its "View prices" link from the list, which opens its prices panel for the stay directly. */
+  link?: string;
 }
 
 /**
@@ -356,6 +358,12 @@ const PLACE_NAMES: Record<string, string> = {
   Higashiyodogawa: '東淀川區', Asahi: '旭區', Tsurumi: '鶴見區', Hirano: '平野區', Amagasaki: '尼崎', Toyonaka: '豐中', Suita: '吹田',
   Shimogyo: '下京區', Nakagyo: '中京區', Higashiyama: '東山區', Minami: '南區', Sakyo: '左京區', Kamigyo: '上京區', Ukyo: '右京區',
   Hakata: '博多區', Naka: '中區', Nakamura: '中村區', Higashi: '東區', Atsuta: '熱田區', Kokurakita: '小倉北區',
+  Omiya: '大宮區', Urawa: '浦和區', Mihama: '美濱區', Inage: '稻毛區', Kohoku: '港北區', Saiwai: '幸區',
+};
+
+const CITY_NAMES: Record<string, string> = {
+  Chiba: '千葉', Saitama: '埼玉', Osaka: '大阪', Kyoto: '京都', Fukuoka: '福岡', Sapporo: '札幌', Nagoya: '名古屋', Yokohama: '橫濱',
+  Kawasaki: '川崎', Kobe: '神戶', Sendai: '仙台', Hiroshima: '廣島', Sakai: '堺', Kitakyushu: '北九州', Okayama: '岡山',
 };
 
 /** A hotel's town or ward from Google's address ("2 Chome-1-29 Uechi, Okinawa, 904-0031, Japan" → 沖繩市) and its postal code. */
@@ -366,9 +374,17 @@ export function hotelArea(address: string): { label: string; postcode: number | 
   const parts = address.replace(/,?\s*Japan\s*$/, '').split(/,\s*/);
   const postalAt = parts.findIndex(part => /\d{3}-\d{4}/.test(part));
   const town = (postalAt > 0 ? parts[postalAt - 1] : parts.at(-1)) ?? '';
-  const named = parts.find(part => /\b(City|Ward)$|-(ku|shi)$/i.test(part.trim())) ?? town;
+  const namedAt = parts.findIndex(part => /\b(City|Ward)$|-(ku|shi)$/i.test(part.trim()));
+  const named = namedAt >= 0 ? parts[namedAt]!.trim() : town.trim();
   const place = named.replace(/\s+(City|Ward)$|-(ku|shi)$/i, '');
-  return { label: PLACE_NAMES[place] ?? place, postcode: postal ? Number(postal[1]) : null };
+  const label = PLACE_NAMES[place] ?? place;
+  // A city's ward goes with its city: "Chuo Ward, Chiba" is 千葉中央區, not Tokyo's 中央區 (2026-10-19).
+  // Tokyo's wards are written "Taito City" and stand alone.
+  if (namedAt >= 0 && /\bWard$|-ku$/i.test(named)) {
+    const city = (parts[namedAt + 1] ?? '').replace(/\s*\d{3}-\d{4}\s*/, '').trim();
+    if (city && !/^\d/.test(city)) return { label: `${CITY_NAMES[city] ?? city}${label}`, postcode: postal ? Number(postal[1]) : null };
+  }
+  return { label, postcode: postal ? Number(postal[1]) : null };
 }
 
 /** Whether a hotel is in its destination's town; true when the destination has no known bounds or the address no postal code. */

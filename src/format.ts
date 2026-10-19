@@ -121,7 +121,7 @@ export function pickFlights(flights: readonly FlightOption[], limit: number): Fl
  *   18:50→22:20・直飛・2h30
  */
 /** Google's "3 hr 5 min" as "3h05": the time in the air, since departure and arrival are local times. */
-export const shortDuration = (duration: string) => duration.replace(/ hr ?/, 'h').replace(/ min/, '').replace(/h(\d)$/, 'h0$1');
+export const shortDuration = (duration: string) => duration.replace(/ hr ?/, 'h').replace(/ min/, '').replace(/h(\d)$/, 'h0$1').replace(/h$/, 'h00');
 
 export function flightLines(flights: readonly FlightOption[], currency: string, limit = 5): string[] {
   return pickFlights(flights, limit).map((flight, index) => {

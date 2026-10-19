@@ -411,4 +411,11 @@ describe('dorm beds', () => {
     expect(hotelArea('2 Chome-6-1 Matsuyama, Naha, Okinawa 900-0032, Japan').label).toBe('那霸');
     expect(inTown('Miyazaki', 880)).toBe(true); // no bounds known
   });
+
+  // 2026-10-19: Chiba's 中央區 read as Tokyo's; COCO STAY Nishikawaguchi passed as Tokyo with no address.
+  it('names a ward with its city, and keeps out a hotel of unknown place', () => {
+    expect(hotelArea('2 Chome-14-1 Fujimi, Chuo Ward, Chiba, 260-0015, Japan').label).toBe('千葉中央區');
+    expect(hotelArea('1 Chome-1 Sakuragicho, Omiya Ward, Saitama, 330-0854, Japan').label).toBe('埼玉大宮區');
+    expect(hotelArea('3 Chome-7-11 Kotobuki, Taito City, Tokyo 111-0042, Japan').label).toBe('台東區');
+  });
 });

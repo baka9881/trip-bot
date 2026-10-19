@@ -14,6 +14,7 @@ import { dealMessage, digestMessage, scanFailingMessage, scanRecoveredMessage, t
 
 const DIGEST_SIZE = 10;
 const MIN_CARDS = 5;
+const LIST_PAGES = 3; // pages of Google Hotels results read per list, some 15 hotels each
 const MAX_HOTEL_LOOKUPS = 3; // hotel pages per scan, for the deepest promotions
 const FAILURE_ALERT_AFTER = 3; // consecutive failed scans (retried hourly) before telling the user
 const DIGEST_MAX_SCAN_AGE_MS = 12 * 3_600_000; // older scans mean the scanner is failing; skip the list
@@ -98,12 +99,41 @@ export async function captureHotelList(watch: Pick<DealWatch, 'currency' | 'coun
       await page.waitForTimeout(1500);
       hotels = parseHotelList(await page.evaluate(() => document.body.innerText));
     }
+    // Each hotel's "View prices for …" link opens its prices panel for the stay, from any page of results.
+    const links = new Map<string, string>();
+    const readLinks = async () => {
+      for (const { label, href } of await page.evaluate(() => [...document.querySelectorAll('a[aria-label^="View prices for "]')]
+        .map(anchor => ({ label: anchor.getAttribute('aria-label') ?? '', href: (anchor as HTMLAnchorElement).href })))) {
+        const name = label.replace(/^View prices for /, '').replace(/\s+/g, ' ').trim();
+        if (!links.has(name)) links.set(name, href);
+      }
+    };
+    await readLinks();
+    // More pages: the first holds 15 of some 60 hotels, too few to find the best value among
+    // (2026-10-19, the user's aim). The page's own "Next" button (photo carousels have "Next" labels too).
+    for (let more = 1; more < LIST_PAGES; more++) {
+      const next = await page.evaluate(() => {
+        const button = [...document.querySelectorAll('button')].find(element => (element as HTMLElement).innerText?.trim() === 'Next') as HTMLElement | undefined;
+        button?.click();
+        return Boolean(button);
+      });
+      if (!next) break;
+      const before = new Set(hotels.map(hotel => hotel.name));
+      let added: HotelListQuote[] = [];
+      for (let waited = 0; waited < 12_000 && !added.length; waited += 1500) {
+        await page.waitForTimeout(1500);
+        added = parseHotelList(await page.evaluate(() => document.body.innerText)).filter(hotel => !before.has(hotel.name));
+      }
+      if (!added.length) break;
+      hotels = [...hotels, ...added];
+      await readLinks();
+    }
     // Google's "N% less than usual", and the rating in layouts that omit it, live in element labels.
     const labels = await page.evaluate(() => [...document.querySelectorAll('[aria-label]')]
       .map(element => element.getAttribute('aria-label') ?? '').filter(label => /less than usual|out of 5 stars/.test(label)));
     const below = parseBelowUsual(labels);
     const ratings = parseLabelRatings(labels);
-    hotels = hotels.map(hotel => ({ ...hotel, rating: hotel.rating ?? ratings.get(hotel.name) ?? null, belowUsualPct: below.get(hotel.name) ?? null }));
+    hotels = hotels.map(hotel => ({ ...hotel, rating: hotel.rating ?? ratings.get(hotel.name) ?? null, belowUsualPct: below.get(hotel.name) ?? null, link: links.get(hotel.name) }));
     // Prices are only meaningful for the requested stay, so confirm the date inputs took it.
     const applied = await stayApplied(page, quote);
     await context.close();
@@ -290,7 +320,7 @@ export interface HotelRating { score: number; source: string }
  * Google gives them a hotel class. Runs a few pages at a time in one browser.
  */
 export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'country'>,
-  stay: Pick<ExploreQuote, 'city' | 'outboundDate' | 'returnDate'>, names: readonly string[]): Promise<{ rooms: Map<string, RoomCheck>; ratings: Map<string, HotelRating>; sites: Map<string, SiteOffer[]>; photos: Map<string, HotelPhotos>; addresses: Map<string, string> }> {
+  stay: Pick<ExploreQuote, 'city' | 'outboundDate' | 'returnDate'>, names: readonly string[], links: ReadonlyMap<string, string> = new Map()): Promise<{ rooms: Map<string, RoomCheck>; ratings: Map<string, HotelRating>; sites: Map<string, SiteOffer[]>; photos: Map<string, HotelPhotos>; addresses: Map<string, string> }> {
   const results = new Map<string, RoomCheck>(names.map(name => [name, { status: 'unknown' }]));
   // Some list layouts print no ratings, so read each hotel's from its own search page.
   const ratings = new Map<string, HotelRating>();
@@ -310,37 +340,46 @@ export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'count
       try {
         for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
           try {
-            // The same list search the candidates came from: a query led by the hotel's name can open
-            // on Google's default dates (2026-10-16: slash 川崎 priced for Oct 19–20 instead of Oct 29–Nov 4).
-            const url = buildHotelSearchUrl({ city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate,
-              currency: watch.currency, country: watch.country });
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-            await dismissGoogleConsent(page);
-            await assertNotBlocked(page);
-            const findLink = (hotel: string) => {
-              const wanted = `view prices for ${hotel}`.toLowerCase();
-              return [...document.querySelectorAll('a')].find(a => (a.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim().toLowerCase() === wanted);
-            };
-            const waitForListing = (timeout: number) => page.waitForFunction(`(${findLink.toString()})(${JSON.stringify(name)}) !== undefined`, undefined, { timeout })
-              .then(() => true, () => false);
-            let listed = await waitForListing(15_000);
-            if (!listed) {
-              // Google reorders the list between loads, so a hotel from the first load can be missing
-              // (2026-10-18: Hotel Takao Asile went out with no photos). Search for it by name instead;
-              // prices are still kept only when the date inputs show the stay.
-              await page.goto(buildHotelNameUrl({ name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate,
-                currency: watch.currency, country: watch.country, language: 'en' }), { waitUntil: 'domcontentloaded', timeout: 30_000 });
-              listed = await waitForListing(15_000);
+            // The hotel's own link from the list opens its prices panel for the stay, whichever page of
+            // results it was on (2026-10-19: hotels from pages 2–3 came back with no room types).
+            const direct = links.get(name);
+            if (direct) {
+              await page.goto(direct, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+              await dismissGoogleConsent(page);
+              await assertNotBlocked(page);
+            } else {
+              // The same list search the candidates came from: a query led by the hotel's name can open
+              // on Google's default dates (2026-10-16: slash 川崎 priced for Oct 19–20 instead of Oct 29–Nov 4).
+              const url = buildHotelSearchUrl({ city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate,
+                currency: watch.currency, country: watch.country });
+              await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+              await dismissGoogleConsent(page);
+              await assertNotBlocked(page);
+              const findLink = (hotel: string) => {
+                const wanted = `view prices for ${hotel}`.toLowerCase();
+                return [...document.querySelectorAll('a')].find(a => (a.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim().toLowerCase() === wanted);
+              };
+              const waitForListing = (timeout: number) => page.waitForFunction(`(${findLink.toString()})(${JSON.stringify(name)}) !== undefined`, undefined, { timeout })
+                .then(() => true, () => false);
+              let listed = await waitForListing(15_000);
+              if (!listed) {
+                // Google reorders the list between loads, so a hotel from the first load can be missing
+                // (2026-10-18: Hotel Takao Asile went out with no photos). Search for it by name instead;
+                // prices are still kept only when the date inputs show the stay.
+                await page.goto(buildHotelNameUrl({ name, city: stay.city, checkIn: stay.outboundDate, checkOut: stay.returnDate,
+                  currency: watch.currency, country: watch.country, language: 'en' }), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                listed = await waitForListing(15_000);
+              }
+              if (!listed) {
+                console.error(`[deals] room check for ${name}: not found in the list or by name`);
+                continue;
+              }
+              // Read the rating while the list is still shown; opening the prices panel replaces it.
+              const rating = parseLabelRatings(await page.evaluate(() => [...document.querySelectorAll('[aria-label]')]
+                .map(element => element.getAttribute('aria-label') ?? '').filter(label => label.includes('out of 5 stars')))).get(name);
+              if (rating !== undefined) ratings.set(name, { score: rating, source: 'Google' });
+              await page.evaluate(`(${findLink.toString()})(${JSON.stringify(name)}).click()`);
             }
-            if (!listed) {
-              console.error(`[deals] room check for ${name}: not found in the list or by name`);
-              continue;
-            }
-            // Read the rating while the list is still shown; opening the prices panel replaces it.
-            const rating = parseLabelRatings(await page.evaluate(() => [...document.querySelectorAll('[aria-label]')]
-              .map(element => element.getAttribute('aria-label') ?? '').filter(label => label.includes('out of 5 stars')))).get(name);
-            if (rating !== undefined) ratings.set(name, { score: rating, source: 'Google' });
-            await page.evaluate(`(${findLink.toString()})(${JSON.stringify(name)}).click()`);
             await page.waitForFunction(() => /All options|Featured options/.test(document.body.innerText), undefined, { timeout: 12_000 }).catch(() => undefined);
             const panel = await page.evaluate(() => {
               const text = document.body.innerText;
@@ -389,14 +428,20 @@ export async function checkHotelRooms(watch: Pick<DealWatch, 'currency' | 'count
             if (found.rooms.length || found.bedroom.length || found.bathroom.length) photos.set(name, found);
             // The Overview tab gives the address: where the hotel is (2026-10-19: four of six "Okinawa"
             // hotels were an hour from Naha, and the list did not say).
-            await page.evaluate(() => ([...document.querySelectorAll('[role=tab], a, button, div')]
-              .find(element => element.textContent?.trim() === 'Overview') as HTMLElement | undefined)?.click());
-            await page.waitForFunction(() => /\d{3}-\d{4},? Japan/.test(document.body.innerText), undefined, { timeout: 6_000 }).catch(() => undefined);
-            const address = await page.evaluate(() => {
-              const text = document.body.innerText;
-              return /[^\n•]*\d{3}-\d{4},? Japan/.exec(text.slice(text.lastIndexOf('Back to list of all results')))?.[0]?.trim() ?? null;
-            });
+            // A hotel without its address is left out of the list, so a slow tab gets a second, longer try.
+            let address: string | null = null;
+            for (const wait of [6_000, 12_000]) {
+              await page.evaluate(() => ([...document.querySelectorAll('[role=tab], a, button, div')]
+                .find(element => element.textContent?.trim() === 'Overview') as HTMLElement | undefined)?.click());
+              await page.waitForFunction(() => /\d{3}-\d{4},? Japan/.test(document.body.innerText), undefined, { timeout: wait }).catch(() => undefined);
+              address = await page.evaluate(() => {
+                const text = document.body.innerText;
+                return /[^\n•]*\d{3}-\d{4},? Japan/.exec(text.slice(text.lastIndexOf('Back to list of all results')))?.[0]?.trim() ?? null;
+              });
+              if (address) break;
+            }
             if (address) addresses.set(name, address);
+            else console.error(`[deals] no address for ${name}`);
           } catch (error) {
             // A block ends the whole check: more requests would only prolong it.
             if (error instanceof GoogleBlockedError) throw error;

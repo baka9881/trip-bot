@@ -7,7 +7,7 @@ const context = { travelers: 2, nonSmoking: true, checkIn: '15:00', checkOut: '1
 const hotel = (lines: string[], photos = ['room.jpg']) => ({ text: lines.join('\n'), photos });
 const plan = { text: ['✈️ [去 酷航 14:25→18:30](https://scoot)', '飛 3h05・約 21:00 到飯店', '[回 酷航 12:10→15:15](https://scoot)',
   '飛 4h05・08:40 就要離開飯店', '來回每人 NT$7,659', '＋托運行李約 NT$1,800（估算）', '分開訂兩張票・省 NT$1,333'].join('\n'), photos: [] };
-const good = hotel(['1. [APA Hotel](https://g)', '⭐4.3・雙人房', '每晚含稅 NT$3,490', '在 [Rakuten Travel](https://r) 訂',
+const good = hotel(['1. [APA Hotel](https://g)', '⭐4.3・雙人房・📍台東區', '每晚含稅 NT$3,490', '在 [Rakuten Travel](https://r) 訂',
   '6晚 NT$20,940', '2人含機票 NT$39,858', '每人 NT$19,929']);
 const keyboard = [['📷 第1間房型']];
 
@@ -31,7 +31,7 @@ test('each mistake the user found is caught', () => {
 });
 
 test('a percent sign inside a link is not a percentage', () => {
-  const linked = hotel(['1. [APA](https://g)', '每晚含稅 NT$3,490', '在 [Booking](https://b?x%3D1) 訂']);
+  const linked = hotel(['1. [APA](https://g)', '⭐4.3・📍台東區', '每晚含稅 NT$3,490', '在 [Booking](https://b?x%3D1) 訂']);
   assert.deepEqual(checkOutput([plan, linked], keyboard, context), []);
 });
 
@@ -58,4 +58,11 @@ test('every listed hotel has its room-photo button', () => {
   const second = { ...good, text: good.text.replace('1. [APA Hotel]', '2. [Sunroute]') };
   assert.match(checkOutput([plan, good, second], keyboard, context).join('\n'), /第 2 間沒有房型按鈕/);
   assert.deepEqual(checkOutput([plan, good, second], [['📷 第1間房型', '📷 第2間房型']], context), []);
+});
+
+// Osaka (2026-10-19): NT$2,980 listed above NT$2,238; the user wants the best value first.
+test('hotels are listed cheapest first', () => {
+  const pricier = { ...good, text: good.text.replace('1. [APA Hotel]', '2. [SHE]').replace('NT$3,490', 'NT$2,980') };
+  const problems = checkOutput([plan, good, pricier], [['📷 第1間房型', '📷 第2間房型']], context).join('\n');
+  assert.match(problems, /沒有照價格排/);
 });

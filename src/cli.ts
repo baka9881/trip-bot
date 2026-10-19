@@ -192,15 +192,16 @@ async function report(filter: string, limit: number) {
     : '1 人來回價\n行李另計・直飛不另標示');
 }
 
-const MAX_HOTELS = 6;
-const ROOM_CHECK_CANDIDATES = 10; // hotels whose prices panel is opened to confirm a private room
+const MAX_HOTELS = 8;
+const ROOM_CHECK_CANDIDATES = 15; // the cheapest well-rated hotels whose prices panel is opened to confirm a private room
 const NEARBY_CANDIDATES = 4; // per nearby area
 const NEARBY_PER_AREA = 2;
 const GOOD_RATING = 3.5;
 
 type Stay = { city: string; outboundDate: string; returnDate: string };
-type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos; warning?: string; area?: string };
-const isGood = (hotel: { rating: number | null }) => hotel.rating !== null && hotel.rating >= GOOD_RATING;
+type Pick = { hotel: HotelListQuote & { ratingSource?: string | null }; nightly: number; note: string; sites: SiteOffer[]; photos?: HotelPhotos; area?: string };
+/** The nightly price a pick is shown at: the linked site's, never under its own (printPicks). */
+const shownNightly = (pick: { nightly: number; sites: readonly SiteOffer[] }) => Math.max(recommendedSite(pick.sites)?.nightly ?? 0, pick.nightly);
 
 /**
  * Hotels in one place for a stay whose rooms were checked: the cheapest
@@ -243,12 +244,17 @@ const cachedFlights = (origin: string, stay: Stay, currency: string, country: st
 async function verifiedStays(watch: { currency: string; country: string }, stay: Stay, candidatesWanted: number, limit: number) {
   const hotels = await captureHotelList(watch, stay);
   if (!hotels) return null;
-  const { nonSmoking } = readUserPrefs();
+  const prefs = readUserPrefs();
+  const { nonSmoking } = prefs;
+  // The checks go to the cheapest hotels the user's bars allow (class, rating), the value candidates;
+  // others only when too few pass.
   const rooms = hotels.filter(isPrivateHotel);
-  const good = rooms.filter(isGood).sort((a, b) => a.nightly - b.nightly);
-  const rest = rooms.filter(hotel => !good.includes(hotel)).sort((a, b) => a.nightly - b.nightly);
-  const candidates = [...good, ...rest].slice(0, candidatesWanted);
-  const { rooms: checks, ratings, sites, photos, addresses } = await checkHotelRooms(watch, stay, candidates.map(hotel => hotel.name));
+  const eligible = rooms.filter(hotel => (hotel.stars ?? 0) >= prefs.minStars && hotel.rating !== null && hotel.rating >= prefs.minRating)
+    .sort((a, b) => a.nightly - b.nightly);
+  const rest = rooms.filter(hotel => !eligible.includes(hotel)).sort((a, b) => a.nightly - b.nightly);
+  const candidates = [...eligible, ...rest].slice(0, candidatesWanted);
+  const { rooms: checks, ratings, sites, photos, addresses } = await checkHotelRooms(watch, stay, candidates.map(hotel => hotel.name),
+    new Map(candidates.flatMap(hotel => hotel.link ? [[hotel.name, hotel.link] as const] : [])));
   const rated = candidates.map(hotel => {
     const found = ratings.get(hotel.name);
     return { ...hotel, rating: hotel.rating ?? found?.score ?? null,
@@ -264,6 +270,8 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     if (check?.status !== 'private') return [];
     // Out of town (Okinawa City for Naha, Kawaguchi for Tokyo) is too far to stay; the user found four such of six.
     const address = addresses.get(hotel.name);
+    // Out of town is too far; an unread address is kept and marked (the user wants the best value, and
+    // dropping such hotels could drop it), so an out-of-town hotel no longer passes as in town unmarked.
     if (address && !inTown(stay.city, hotelArea(address).postcode)) return [];
     // Smoking rooms are left out when the user minds the smell; a hotel with nothing else goes.
     const options = check.options.filter(option => !(nonSmoking && isSmokingRoom(option.name)));
@@ -272,22 +280,25 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
     // cheapest room that fits (2026-10-18: three lists offered a single room to two people, priced
     // as one). A hotel with only singles is left out.
     if (travelers >= 2) {
-      // A room with its own bathroom first; a shared-bathroom room only when the hotel has nothing else.
+      // A room with its own bathroom: a shared bathroom is poor value for two (the user asked whether
+      // it meant bathing with strangers, 2026-10-18), so a hotel with only those is left out.
       const fits = options.filter(option => roomType(option.name) !== '單人房');
-      const forTwo = fits.find(option => !/共用衛浴/.test(roomType(option.name))) ?? fits[0];
+      const forTwo = fits.find(option => !/共用衛浴/.test(roomType(option.name)));
       if (!forTwo) return [];
       return [{ hotel, room: forTwo, nightly: Math.max(forTwo.nightly, quoted) }];
     }
     const room = options[0]!;
     return [{ hotel, room, nightly: check.alsoShared || room !== check.room ? Math.max(room.nightly, quoted) : quoted }];
-  }).sort((a, b) => Number(!isGood(a.hotel)) - Number(!isGood(b.hotel)) || a.nightly - b.nightly);
-  const areaOf = (name: string) => { const address = addresses.get(name); return address ? hotelArea(address).label : undefined; };
+  });
+  const areaOf = (name: string) => { const address = addresses.get(name); return address ? hotelArea(address).label : '位置未確認'; };
   const unconfirmed = rated.filter(hotel => checks.get(hotel.name)?.status === 'unknown');
   const picks: Pick[] = [
     ...verified.map(({ hotel, room, nightly }) => ({ hotel, nightly, note: `✅ ${roomType(room.name)}`, sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name), area: areaOf(hotel.name) })),
     ...unconfirmed.filter(hotel => { const address = addresses.get(hotel.name); return !address || inTown(stay.city, hotelArea(address).postcode); })
       .map(hotel => ({ hotel, nightly: hotel.nightly, note: '❔ 房型未確認', sites: sites.get(hotel.name) ?? [], photos: photos.get(hotel.name), area: areaOf(hotel.name) })),
-  ].slice(0, limit);
+  // Cheapest first, confirmed or not: everything listed has passed the bars (own bathroom, no bunk, rating,
+  // non-smoking, in town), so the order is the value order (the user's aim, 2026-10-19).
+  ].sort((a, b) => shownNightly(a) - shownNightly(b)).slice(0, limit);
   return { picks, shared };
 }
 
@@ -295,7 +306,8 @@ async function verifiedStays(watch: { currency: string; country: string }, stay:
 function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPrice: number, currency: string, country: string, start = 1) {
   // The user's format (2026-10-18): name, photos, rating and room type, the nightly price at the one
   // recommended site with its link, then the totals. No cancellation terms, labels or room price gaps.
-  picks.forEach(({ hotel, nightly: listNightly, note, sites, photos, warning, area }, index) => {
+  // Cheapest first as shown, whatever order a cached list was saved in.
+  [...picks].sort((a, b) => shownNightly(a) - shownNightly(b)).forEach(({ hotel, nightly: listNightly, note, sites, photos, area }, index) => {
     // One price: what the linked site charges, but never under the pick's own price, which may be
     // for a bigger room than the site's cheapest offer (a room for two rather than a single); the
     // link then goes to a site asking about that price.
@@ -314,7 +326,6 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const type = note.replace(/^✅ /, '');
     for (const line of phoneLines([hotel.rating !== null ? `⭐${hotel.rating.toFixed(1)}` : null, type === '私人房' ? null : type,
       hotel.publicBath ? '♨️大浴場' : null, area ? `📍${area}` : null])) console.log(line);
-    if (warning) console.log(warning);
     // Every hotel gets a link to book or compare: Google's own page when it named no site for it.
     const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : `\n在 [Google](${url}) 看價格`;
     console.log(`每晚含稅 ${money(nightly, currency)}${booking}${saving > 0 ? `\n🏷 比平常省 ${money(saving, currency)}／晚` : ''}`);
@@ -387,14 +398,23 @@ async function hotelsFor(code: string | undefined, nearby = false) {
       console.log(`\n${cityLabel(row.city)} 沒有設定周邊住宿區域，市區的選擇已經是主要選項。`);
       return;
     }
+    // Staying farther out is for paying less: only hotels cheaper than the cheapest in town (2026-10-19:
+    // Kamata at NT$4,517 a night beside a town list from NT$3,379).
+    const prefs = readUserPrefs();
+    const town = await cachedStays(watch, stay, ROOM_CHECK_CANDIDATES, MAX_HOTELS).catch(error => { if (isBlocked(error)) throw error; return null; });
+    const townPicks = (town?.picks ?? []).filter(pick => fitsPrefs(pick, prefs));
+    const townCheapest = townPicks.length ? Math.min(...townPicks.map(shownNightly)) : null;
+    if (townCheapest !== null) console.log(`市區最便宜每晚 ${money(townCheapest, row.currency)}`);
     let number = 1;
     for (const area of areas) {
       const areaStay: Stay = { ...stay, city: area.area };
       const result = await cachedStays(watch, areaStay, NEARBY_CANDIDATES, NEARBY_PER_AREA);
       console.log(`\n📍 *${area.label}*\n${area.ride.replace('到', '🚃 到')}`);
+      const cheaper = (result?.picks ?? []).filter(pick => townCheapest === null || shownNightly(pick) < townCheapest);
       if (!result?.picks.length) { console.log('這次沒查到確認過的私人房。'); continue; }
-      printPicks(await ownBathrooms(result.picks), areaStay, nights, perFare, row.currency, watch.country, number);
-      number += result.picks.length;
+      if (!cheaper.length) { console.log('沒有比市區便宜的'); continue; }
+      printPicks(await ownBathrooms(cheaper), areaStay, nights, perFare, row.currency, watch.country, number);
+      number += cheaper.length;
     }
     return;
   }
@@ -447,22 +467,26 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
 async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
   const { nonSmoking } = readUserPrefs();
   const result: Pick[] = [];
-  for (const pick of picks) {
+  for (let pick of picks) {
     const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
     const bookingUrl = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
     const found = bookingUrl ? await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(() => null) : null;
     const rooms = found?.rooms ?? [];
-    // Google's room names hide bunk beds (Minn Kamata's "Quadruple Room" is bunks, 2026-10-19): the
-    // user picks from the list, so a hotel whose rooms for the party are all bunks says so.
+    // Google's room names hide bunk beds and shared bathrooms (Minn Kamata's "Quadruple Room" is bunks,
+    // DOYANEN BAKURO's twin a bunk with a shared bathroom): a hotel whose rooms for the party on Booking
+    // are all smoking, bunks or shared-bathroom is poor value for two and is left out.
     const fits = rooms.filter(room => !isDormBed(room.name) && (room.guests === null || room.guests >= Math.min(travelers, 2)));
-    const forParty = nonSmoking ? fits.filter(room => !isSmokingRoom(room.name)) : fits;
     const bunk = (room: BookingRoom) => room.bunkInPhotos || room.beds.some(bed => /bunk/i.test(bed));
-    if (fits.length && !forParty.length) continue; // only smoking rooms left: the user wants none
-    const warning = forParty.length && forParty.every(bunk) ? '⚠️ Booking 照片是上下鋪' : undefined;
-    if (!pick.hotel.publicBath || !pick.photos) { result.push({ ...pick, warning }); continue; }
+    const forParty = fits.filter(room => !(nonSmoking && isSmokingRoom(room.name)) && !bunk(room) && room.bathroom !== 'shared');
+    if (fits.length && !forParty.length) continue;
+    // Google's panel names no room for some hotels (APA's own rates): Booking's cheapest room that
+    // suits the party says what it is.
+    const cheapest = [...forParty].sort((a, b) => (a.stayTotal ?? Infinity) - (b.stayTotal ?? Infinity))[0];
+    if (pick.note.startsWith('❔') && cheapest) pick = { ...pick, note: `✅ ${roomType(cheapest.name)}` };
+    if (!pick.hotel.publicBath || !pick.photos) { result.push(pick); continue; }
     const listed = pick.note.replace(/^[✅❔] /, '');
     const bathroom = [...forParty.filter(room => roomType(room.name) === listed), ...forParty].map(room => room.bathroomPhoto).find(Boolean);
-    result.push({ ...pick, warning, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
+    result.push({ ...pick, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
   }
   return result;
 }
@@ -530,7 +554,8 @@ async function printFlightPlan(watch: TripOption['watch'], row: TripOption['row'
   if (nightsOf(stay) <= SHORT_TRIP_NIGHTS && forTime > 0) console.log(`早去晚回・比最便宜多 ${money(forTime, currency)}`);
   const difference = buy.other ? Math.abs(buy.other.price - buy.chosen.price) : 0;
   if (separate) console.log(`分開訂兩張票${difference ? `・省 ${money(difference, currency)}` : ''}`);
-  else console.log(`去回同一張票${buy.other?.separateTickets && difference ? `・分開訂可省 ${money(difference, currency)}` : ''}`);
+  // One ticket is one booking: say the one link covers both legs (only the outbound line is linked).
+  else for (const line of phoneLines(['去回同一張票・去程連結一次訂', buy.other?.separateTickets && difference ? `分開訂可省 ${money(difference, currency)}` : null])) console.log(line);
   return buy.chosen.price + (bagged ? prefs.bagFeeEstimate : 0);
 }
 
@@ -992,21 +1017,29 @@ function recentRuleProblems(since: number): string[] {
 async function checkAll() {
   const entries = [...new Set((await activeWatches()).filter(({ watch }) => watch.lastScanAt).map(({ letter }) => letter))];
   const runs: string[][] = [['report', 'all', '--limit', '5'], ...entries.map(letter => ['hotels-for', `${letter}1`])];
-  if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', '1'], ['rooms', '2']);
+  if (entries.length) runs.push(['hotels-for', `${entries[0]}1`], ['rooms', 'each']);
   // The nearby list too (2026-10-19: it went unchecked and a hotel lost its button): the first option
   // whose city has nearby areas, then the room photos of each hotel it lists.
   const options = entries.flatMap(letter => [1, 2, 3, 4, 5].map(number => `${letter}${number}`));
   for (const code of options) {
     const option = await resolveOption(code).catch(() => null);
     if (!option || !nearbyAreas(option.row.city).length) continue;
-    runs.push(['hotels-for', code, '--nearby'], ...[1, 2, 3, 4, 5].map(n => ['rooms', String(n)]));
+    runs.push(['hotels-for', code, '--nearby'], ['rooms', 'each']);
     break;
   }
   // A dated trip as the user would ask for one: Osaka, five nights, two months out.
   const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
   runs.push(['trip', '大阪', day(60), day(65)], ['watches'], ['prefs']);
   let failures = 0;
-  for (const run of runs) {
+  for (let at = 0; at < runs.length; at++) {
+    const run = runs[at]!;
+    // "rooms each": the room photos of every hotel the list just before it saved, however many.
+    if (run[0] === 'rooms' && run[1] === 'each') {
+      let listed: ListedHotel[] = [];
+      try { listed = (JSON.parse(readFileSync(LAST_HOTELS_FILE, 'utf8')) as { hotels: ListedHotel[] }).hotels; } catch { /* none */ }
+      runs.splice(at + 1, 0, ...listed.map(hotel => ['rooms', String(hotel.n)]));
+      continue;
+    }
     const result = spawnSync(process.execPath, [...process.execArgv, process.argv[1]!, ...run, '--check'], { encoding: 'utf8', timeout: 600_000 });
     const verdict = (result.stdout ?? '').trim().split('\n').filter(line => /^[✓✗]/.test(line));
     const error = (result.stderr ?? '').split('\n').filter(line => line && !/ExperimentalWarning|--trace-warnings|^\[deals\]/.test(line)).join(' ').slice(0, 200);
