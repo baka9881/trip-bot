@@ -1115,7 +1115,7 @@ try {
     const text = segments.map(segment => segment.text).filter(Boolean).join('\n');
     try {
       await sendToTelegram(segments, keyboard);
-      print('✅ 已直接傳到 Telegram，附可以點的按鈕。不要再貼一次內容，只回一句：「👆 點下面的按鈕就可以選」。');
+      print('✅ 已直接傳到 Telegram，附可以點的按鈕。不要再貼一次內容，只回「✅」，不要多說。');
     } catch (error) {
       print(`（按鈕版傳送失敗：${error instanceof Error ? error.message : String(error)}。請照原樣貼出以下內容）\n\n${text}`);
     }
