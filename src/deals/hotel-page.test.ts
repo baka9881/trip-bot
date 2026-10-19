@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDormBed, isNonSmokingRoom, isSmokingRoom, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
+import { isDormBed, isNonSmokingRoom, isSmokingRoom, parseGoogleRoomRow, roomKey, buildHotelNameUrl, buildHotelSearchUrl, classifyRooms, dateInputLabel, isPrivateHotel, nearbyAreas, parseBelowUsual, parseHotelList, parseLabelRatings, parseRoomOffers, parseSiteOffers, attachSiteLinks, largePhotoUrl, roomPhotos, summarizeHotels, bestSiteRating } from './hotel-page';
 
 // Excerpt captured from a live Google Hotels search (Okinawa, Nov 1-7 2026, hl=en, curr=TWD).
 const LIVE = `Skip to main content
@@ -386,5 +386,15 @@ describe('dorm beds', () => {
     expect(isSmokingRoom('Standard Double Room')).toBe(false);
     expect(isNonSmokingRoom('Double Room - Non-Smoking')).toBe(true);
     expect(isNonSmokingRoom('Standard Double Room')).toBe(false);
+  });
+
+  // Google's panel rows are the room types of a hotel Booking and Trip.com do not sell (2026-10-19).
+  it('reads a room row of Google\'s price panel', () => {
+    expect(parseGoogleRoomRow('Semi Double Room - Non-Smoking1 double bedNT$3,205NT$3,205NT$19,233Visit site'))
+      .toEqual({ name: 'Semi Double Room - Non-Smoking', beds: ['1 double bed'], nightly: 3205, stayTotal: 19233, guests: null });
+    expect(parseGoogleRoomRow('Cheapest combo roomsSuite · SuiteNT$2,394NT$2,394NT$14,361Visit site').name).toBe('Suite');
+    expect(parseGoogleRoomRow('Standard Semi-Double Room1 single bed ·')).toEqual({ name: 'Standard Semi-Double Room', beds: ['1 single bed'], nightly: null, stayTotal: null, guests: null });
+    expect(parseGoogleRoomRow('Cozy Room for 1 Adult - Non-Smoking').guests).toBe(1);
+    expect(roomKey('Cozy Room for 2 Adults - Non-Smoking')).toBe(roomKey('Cozy Room (for 2 Adults), Non Smoking'));
   });
 });

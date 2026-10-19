@@ -177,6 +177,24 @@ export function parseRoomOffers(panelText: string): RoomOffer[] {
  */
 export interface HotelPhotos { rooms: { name: string; url: string }[]; bedroom: string[]; bathroom: string[] }
 
+/**
+ * A room row of Google's price panel, as kept with its photo: "Semi Double Room - Non-Smoking1 double
+ * bedNT$3,205NT$3,205NT$19,233Visit site" → name, beds, nightly and stay total. For a hotel neither
+ * Booking nor Trip.com sells, these rows are the room types the user can look at (2026-10-19).
+ */
+export function parseGoogleRoomRow(text: string): { name: string; beds: string[]; nightly: number | null; stayTotal: number | null; guests: number | null } {
+  const cleaned = text.replace(/^Cheapest combo rooms?/i, '').replace(/Visit site.*$/i, '');
+  const name = cleaned.split(/\d+ [a-z-]*\s?(?:bed|futon)s?|NT\$|·/i)[0]!.trim();
+  const beds = [...cleaned.matchAll(/(\d+ [a-z-]+(?: [a-z-]+)? (?:bed|futon)s?)/gi)].map(match => match[1]!);
+  const amounts = [...cleaned.matchAll(/NT\$([\d,]+)/g)].map(match => Number(match[1]!.replace(/,/g, '')));
+  const guests = /for (\d) adults?|\((\d) ?persons?\)/i.exec(name);
+  return { name, beds, nightly: amounts[0] ?? null, stayTotal: amounts.length >= 3 ? amounts.at(-1)! : null,
+    guests: guests ? Number(guests[1] ?? guests[2]) : null };
+}
+
+/** One room type however each site words it: "Cozy Room for 2 Adults - Non-Smoking" = "Cozy Room (for 2 Adults), Non Smoking". */
+export const roomKey = (name: string) => name.toLowerCase().replace(/non[- ]?smoking/g, '').replace(/[^a-z0-9]/g, '');
+
 /** The private rooms the prices panel shows a photo for, once each, at a viewable size. */
 export function roomPhotos(rows: readonly { name: string; url: string }[]): { name: string; url: string }[] {
   const seen = new Set<string>();

@@ -13,7 +13,7 @@ const amount = (line: string | undefined) => {
   return match ? Number(match[1]!.replace(/,/g, '')) : null;
 };
 const HOTEL_LINE = /^(\d+)\. \[([^\]]+)\]\(/;
-const SHOWN_NAME = /^(\d+\. |🏨 )\[|^[\x20-\x7E]+$/; // hotel and room names may wrap; they cannot be shortened
+const SHOWN_NAME = /^(\d+\. |🏨 )\[|^📷 \*\d+\. |^[\x20-\x7E]+$/; // hotel and room names may wrap; they cannot be shortened
 
 /** Problems with one rendered command output; empty when it follows every rule. */
 export function checkOutput(segments: readonly CheckedSegment[], keyboard: readonly (readonly string[])[], context: RuleContext): string[] {
@@ -38,7 +38,7 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
   }
 
   // A party of two or more is never offered a single room (2026-10-18).
-  if (context.travelers >= 2) for (const line of lines) if (/^⭐.*單人房/.test(line)) problems.push(`${context.travelers} 人同行卻列單人房：${line}`);
+  if (context.travelers >= 2) for (const line of lines) if (/^⭐.*單人房|^🛏 \*單人房|住不下/.test(line)) problems.push(`${context.travelers} 人同行卻列單人房：${line}`);
 
   // Separate tickets are two bookings, each with its own link (2026-10-19); each leg shows its time
   // in the air, since local times differ by an hour (2026-10-19).
@@ -80,6 +80,10 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
       problems.push(`${name}：住宿 NT$${stay} ＋ 機票 NT$${fare} × ${context.travelers} ≠ NT$${total}`);
     }
   }
+
+  // Each room type once in the room photos (2026-10-19: Google's rows listed one room per site).
+  const roomNames = lines.filter((line, index) => /^🛏 /.test(lines[index - 1] ?? ''));
+  for (const name of new Set(roomNames.filter((name, index) => roomNames.indexOf(name) !== index))) problems.push(`房型重複：${name}`);
 
   // Buttons to tap instead of typing (2026-10-17): a list of options always comes with them.
   if (/^\*?[A-C]\d\*? \[|^\d+\. \[/m.test(text) && !keyboard.length) problems.push('有選項但沒有按鈕');

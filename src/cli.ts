@@ -14,7 +14,7 @@
 // Add --telegram to send the output to the trip chat with tap-to-send buttons instead of printing it.
 import { CITY_NAMES, cityLabel } from './deals/message';
 import { TRIP_LENGTHS, buildCardSearchUrl, isTripLength, type TripLength } from './deals/explore-page';
-import { buildHotelNameUrl, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
+import { buildHotelNameUrl, isDormBed, isNonSmokingRoom, isPrivateHotel, isSmokingRoom, nearbyAreas, parseGoogleRoomRow, roomKey, type HotelListQuote, type SiteOffer, type HotelPhotos } from './deals/hotel-page';
 import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDueDealWatches, searchFlights } from './deals/runner';
 import type { FlightOption } from './deals/flight-list';
 import { atHotel, chooseBookingOption, chooseFlight, chooseReturn, clock, fitsCheckIn, fitsCheckOut, leavesHotel, readPrefs, type Prefs } from './prefs';
@@ -287,7 +287,7 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const saving = hotel.belowUsualPct ? Math.round(hotel.nightly / (1 - hotel.belowUsualPct / 100) - hotel.nightly) : 0;
     const album = photos ? listPhoto(photos, note.replace(/^[✅❔] /, '')) : [];
     beginSegment(album, true);
-    listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly);
+    listHotel(start + index, hotel.name, sites, nights, currency, hotel.nightly, photos, url);
     // Flush-left short lines: a caption under a photo is narrow on a phone and indents read as ragged.
     console.log(`${start + index}. [${hotel.name}](${url})`);
     // "私人房" only means the site named no type; it says nothing, so leave it out.
@@ -569,27 +569,29 @@ async function tripSearch(cityArg: string | undefined, outboundDate: string | un
  * its Booking.com page (from Google's price link) when Booking sold it.
  */
 const LAST_HOTELS_FILE = new URL('../data/last-hotels.json', import.meta.url);
-type ListedHotel = { n: number; name: string; bookingUrl: string | null; tripHotelId?: string | null; nightly?: number };
+type ListedHotel = { n: number; name: string; bookingUrl: string | null; tripHotelId?: string | null; nightly?: number;
+  /** Google's room photos and its page: the room types of a hotel neither Booking nor Trip.com sells. */
+  googlePhotos?: HotelPhotos; googleUrl?: string };
 const listedHotels: ListedHotel[] = [];
 let listedStay: { nights: number; currency: string } | null = null;
 /** The stay of the last hotel list, so a hotel from it can be watched for price drops. */
 let lastStayFor: (Stay & { currency: string; country: string; origin: string }) | null = null;
 
-function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number) {
+function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number, googlePhotos?: HotelPhotos, googleUrl?: string) {
   const booking = sites.find(site => /^booking/i.test(site.site) && site.url);
   const trip = sites.find(site => /^trip\.com/i.test(site.site) && site.url);
   listedHotels.push({ n, name, bookingUrl: booking?.url ? bookingUrlFromGoogle(booking.url) : null,
-    tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly });
+    tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly, googlePhotos, googleUrl });
   listedStay = { nights, currency };
 }
 
 const ROOM_PHOTO_BUTTON = (n: number) => `📷 第${n}間房型`;
 
-/** Remember the list and offer a room-photo button for each hotel Booking.com or Trip.com sells. */
+/** Remember the list and offer a room-photo button for each hotel with room types to show (Booking, Trip.com or Google). */
 function saveListedHotels() {
   if (!listedHotels.length) return;
   writeFileSync(LAST_HOTELS_FILE, `${JSON.stringify({ savedAt: new Date().toISOString(), stay: listedStay, trip: lastStayFor, hotels: listedHotels }, null, 2)}\n`);
-  const buttons = listedHotels.filter(hotel => hotel.bookingUrl || hotel.tripHotelId).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
+  const buttons = listedHotels.filter(hotel => hotel.bookingUrl || hotel.tripHotelId || hotel.googlePhotos?.rooms.length).map(hotel => ROOM_PHOTO_BUTTON(hotel.n));
   const rows: string[][] = [];
   for (let start = 0; start < buttons.length; start += BUTTONS_PER_ROW) rows.push(buttons.slice(start, start + BUTTONS_PER_ROW));
   keyboard = [...rows, ...keyboard];
@@ -622,6 +624,21 @@ async function roomsFor(which: string | undefined) {
     });
     if (fromTrip?.rooms.length && (usable(fromTrip) || !result?.rooms.length)) { result = fromTrip; source = 'Trip.com'; }
   }
+  // A hotel neither site sells (the user found no button for two of six, 2026-10-19): the room
+  // types Google's price panel showed with their photos, and the hotel's own bathroom photo.
+  if (!result?.rooms.length && hotel.googlePhotos?.rooms.length) {
+    const bathroom = hotel.googlePhotos.bathroom[0];
+    // Each site lists the same rooms in its own words: one entry per room type, at most four.
+    const byType = new Map<string, BookingRoom>();
+    for (const { name, url } of hotel.googlePhotos.rooms) {
+      const row = parseGoogleRoomRow(name);
+      if (!row.name || byType.has(roomKey(row.name))) continue;
+      byType.set(roomKey(row.name), { name: row.name, guests: row.guests, stayTotal: row.stayTotal ?? (row.nightly ? row.nightly * nights : null),
+        freeCancelUntil: null, sizeM2: null, beds: row.beds, bathroom: null, photos: [url, ...(bathroom ? [bathroom] : [])], bunkInPhotos: false, resale: false });
+    }
+    result = { hotelUrl: hotel.googleUrl ?? '', rooms: [...byType.values()].slice(0, 4) };
+    source = 'Google';
+  }
   if (!result?.rooms.length) {
     const link = hotel.bookingUrl ? `\n[直接在 Booking 看這間](${hotel.bookingUrl})` : '';
     console.log(`${n}. ${hotel.name}：Booking 和 Trip.com 這次都沒有顯示房型（可能暫時擋住或已客滿）。${link}`);
@@ -632,7 +649,9 @@ async function roomsFor(which: string | undefined) {
   // Smoking rooms are left out too when the user minds the smell (they were shown one, 2026-10-19).
   const { nonSmoking } = readUserPrefs();
   const smoking = nonSmoking ? result.rooms.filter(room => isSmokingRoom(room.name)) : [];
-  const privateRooms = result.rooms.filter(room => !isDormBed(room.name) && !smoking.includes(room));
+  // Rooms too small for the party are left out as well: two people are never offered a single (2026-10-18).
+  const tooSmall = result.rooms.filter(room => room.guests !== null && room.guests < Math.min(travelers, 2));
+  const privateRooms = result.rooms.filter(room => !isDormBed(room.name) && !smoking.includes(room) && !tooSmall.includes(room));
   console.log(`📷 *${n}. ${hotel.name}*\n各房型照片和資料（${source}）${dormBeds.length ? '\n⚠️ 這間也賣宿舍床位，已排除' : ''}`);
   if (!privateRooms.length) { console.log(smoking.length ? '只有吸菸房，沒有禁菸房。' : '只有宿舍床位，沒有私人房。'); return; }
   let previousPhotos = '';
@@ -664,7 +683,7 @@ async function roomsFor(which: string | undefined) {
     else if (!room.photos.length) console.log(`（${source} 沒有這個房型的房間照）`);
   }
   beginSegment();
-  console.log(`[在 ${source} 看這間、訂房](${result.hotelUrl})\n價格是 ${source} 含稅總價`);
+  console.log(`[在 ${source} 看這間、訂房](${result.hotelUrl})\n${privateRooms.some(room => room.stayTotal) ? `價格是 ${source} 含稅總價` : '房價看清單上的每晚價'}`);
 }
 
 /**
