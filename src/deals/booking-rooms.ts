@@ -117,8 +117,23 @@ export function photoKind(alt: string): 'room' | 'bathroom' | null {
   return null;
 }
 
-async function readRooms(page: Page): Promise<BookingRoom[]> {
-  // Rows of the availability table; one room type can have several rows (rates). Keep its cheapest.
+/**
+ * Which of two rate rows of one room to keep. Booking prices a room per number of guests (Amawari
+ * Hotel, 2026-10-19: a double at the one-adult rate looked like a room for one): a rate for the whole
+ * party beats a cheaper one for fewer people, then the cheaper wins. The room holds the most guests
+ * any of its rates names.
+ */
+export function betterRate<T extends { guests: number | null; stayTotal: number | null }>(known: T | undefined, row: T, adults: number): T {
+  if (!known) return row;
+  const fits = (rate: T) => rate.guests === null || rate.guests >= adults;
+  const most = known.guests === null || row.guests === null ? null : Math.max(known.guests, row.guests);
+  const keep = fits(row) !== fits(known) ? (fits(row) ? row : known)
+    : (row.stayTotal ?? Infinity) < (known.stayTotal ?? Infinity) ? row : known;
+  return { ...keep, guests: most };
+}
+
+async function readRooms(page: Page, adults: number): Promise<BookingRoom[]> {
+  // Rows of the availability table; one room type can have several rows (rates per guests and plan).
   const rows = await page.evaluate(() => [...document.querySelectorAll('.hprt-table tbody tr')].map(row => ({
     id: (row.getAttribute('data-block-id') ?? '').split('_')[0] ?? '',
     name: row.querySelector('.hprt-roomtype-link')?.textContent?.trim() ?? '',
@@ -136,10 +151,9 @@ async function readRooms(page: Page): Promise<BookingRoom[]> {
     if (!row.id) continue;
     const parsed = { ...parseRoomRow(row.text), stayTotal: parseRoomRow(row.price).stayTotal };
     const known = byId.get(row.id);
-    if (known && (parsed.stayTotal ?? Infinity) >= (known.stayTotal ?? Infinity)) continue;
-    byId.set(row.id, { name: row.name || known?.name || last.name, ...parsed, ...parseRoomFacts(row.room || last.room),
+    byId.set(row.id, betterRate(known, { name: row.name || known?.name || last.name, ...parsed, ...parseRoomFacts(row.room || last.room),
       photos: (photos.get(row.id)?.urls ?? []).slice(0, PHOTOS_PER_ROOM), bunkInPhotos: photos.get(row.id)?.bunk ?? false,
-      bathroomPhoto: photos.get(row.id)?.bathroom ?? null, resale: !/^\d+$/.test(row.id) });
+      bathroomPhoto: photos.get(row.id)?.bathroom ?? null, resale: !/^\d+$/.test(row.id) }, adults));
   }
   return [...byId.values()].slice(0, MAX_ROOM_TYPES);
 }
@@ -171,7 +185,7 @@ export async function fetchBookingRooms(bookingUrl: string): Promise<{ hotelUrl:
     const listed = await page.waitForSelector('.hprt-table', { timeout: 15_000 }).then(() => true, () => false);
     if (!listed) return null;
     const hotelUrl = page.url().replace(/#.*$/, '');
-    const rooms = await readRooms(page);
+    const rooms = await readRooms(page, Number(search.searchParams.get('group_adults')) || 1);
     await context.close();
     return { hotelUrl, rooms };
   } finally {

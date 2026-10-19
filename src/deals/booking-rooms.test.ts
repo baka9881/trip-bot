@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bookingUrlFromGoogle, parseRoomFacts, parseRoomPhotoSets, parseRoomPhotos, parseRoomRow, photoKind } from './booking-rooms';
+import { betterRate, bookingUrlFromGoogle, parseRoomFacts, parseRoomPhotoSets, parseRoomPhotos, parseRoomRow, photoKind } from './booking-rooms';
 
 describe('Booking.com rooms', () => {
   it('finds the Booking page behind a Google price link', () => {
@@ -56,6 +56,15 @@ describe('Booking.com rooms', () => {
       { id: '2', large_url: 'https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.webp?k=b&o=' ,associated_rooms: [ '7' ] },
       "AccommodationPhoto:2":{"__typename":"AccommodationPhoto","id":2,"altText":"a white bathroom with a sink and a tub","x":{}}`;
     expect(parseRoomPhotoSets(html).get('7')?.bathroom).toBe('https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.jpg?k=b&o=');
+  });
+
+  // Amawari Hotel (2026-10-19): the double's one-adult rate made it look like a room for one.
+  it('keeps the rate for the whole party, not a cheaper one for fewer people', () => {
+    const one = { guests: 1, stayTotal: 2726 };
+    const two = { guests: 2, stayTotal: 3300 };
+    expect(betterRate(betterRate(undefined, one, 2), two, 2)).toEqual({ guests: 2, stayTotal: 3300 });
+    expect(betterRate(betterRate(undefined, two, 2), one, 2)).toEqual({ guests: 2, stayTotal: 3300 });
+    expect(betterRate(betterRate(undefined, two, 1), one, 1)).toEqual({ guests: 2, stayTotal: 2726 });
   });
 
   it('tells room and bathroom photos from amenity close-ups', () => {
