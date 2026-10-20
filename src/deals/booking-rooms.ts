@@ -210,6 +210,8 @@ export async function fetchBookingRooms(bookingUrl: string, expectedName?: strin
       if (!found.searchParams.get('dest_id')) return null;
       for (const [key, value] of search.searchParams) if (key !== 'ss') found.searchParams.set(key, value);
       await page.goto(found.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    } else {
+      await page.goto(search.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
     }
     if (!/\/hotel\/[a-z]{2}\//.test(page.url())) {
       // The hotel's own result: by name when one is expected (results near it come first otherwise).

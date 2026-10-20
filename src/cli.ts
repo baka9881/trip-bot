@@ -27,6 +27,7 @@ import { airlineName, bedText, flightLines, phoneLines, shortDuration, withAdult
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { auditFlights, auditStays, type AuditPick } from './audit';
 import { createHash } from 'node:crypto';
+import { freshProfile, saveProfile } from './hotel-profiles';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { checkOutput } from './rules';
@@ -466,17 +467,54 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
  * (APA Asakusa, 2026-10-19), and the user wants the room's own bathroom: it comes from the hotel's
  * Booking page (cached; one page per such hotel), else the hotel gets no bathroom photo.
  */
+/**
+ * A hotel's Booking rooms: from its profile when the background jobs already fetched it (photos and
+ * room types do not change with the dates), else fetched now and kept. Google's Booking offer when it
+ * shows one, else Booking searched by the hotel's name (kept only when the page names that hotel).
+ */
+async function bookingRoomsFor(pick: Pick, stay: Stay, currency: string): Promise<BookingRoom[]> {
+  const profile = freshProfile(pick.hotel.name);
+  if (profile) return profile.rooms;
+  const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
+  const fromGoogle = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
+  const bookingUrl = fromGoogle ?? bookingSearchUrl(pick.hotel.name, stay, Math.min(travelers, 2), currency);
+  const found = await fetchBookingRooms(bookingUrl, fromGoogle ? undefined : pick.hotel.name).catch(() => null);
+  saveProfile({ name: pick.hotel.name, hotelUrl: found?.hotelUrl ?? null, rooms: found?.rooms ?? [], fetchedAt: new Date().toISOString() });
+  return found?.rooms ?? [];
+}
+
+// Hotels profiled per background run: few, so Booking does not start challenging the visits.
+const PROFILES_PER_RUN = 4;
+
+/**
+ * Profile the hotels of the lists already prepared (the prefetched stays) that have no fresh profile
+ * yet, a few per run, so their photos and room checks are ready when a list is shown (the user's
+ * request, 2026-10-20). Returns how many were fetched.
+ */
+async function profileHotels(limit = PROFILES_PER_RUN): Promise<number> {
+  let fetched = 0;
+  let files: string[] = [];
+  try { files = readdirSync(CACHE_DIR).filter(file => file.startsWith('stays-')); } catch { return 0; }
+  for (const file of files) {
+    let saved: { key: [Stay, string, ...unknown[]]; value: { picks: Pick[] } | null };
+    try { saved = JSON.parse(readFileSync(new URL(file, CACHE_DIR), 'utf8')); } catch { continue; }
+    const [stay, currency] = saved.key;
+    for (const pick of saved.value?.picks ?? []) {
+      if (fetched >= limit) return fetched;
+      if (freshProfile(pick.hotel.name)) continue;
+      await bookingRoomsFor(pick, stay, currency);
+      fetched++;
+      await pause();
+    }
+  }
+  return fetched;
+}
+
 async function ownBathrooms(picks: readonly Pick[], stay: Stay, currency: string): Promise<Pick[]> {
   const { nonSmoking } = readUserPrefs();
   const result: Pick[] = [];
   for (let pick of picks) {
-    const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
-    // Google's Booking offer when it shows one, else Booking searched by the hotel's name (kept only
-    // when the page names that hotel): every listed hotel gets the room checks and a bathroom photo.
-    const fromGoogle = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
-    const bookingUrl = fromGoogle ?? bookingSearchUrl(pick.hotel.name, stay, Math.min(travelers, 2), currency);
-    const found = await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl, fromGoogle ? undefined : pick.hotel.name)).catch(() => null);
-    const rooms = found?.rooms ?? [];
+    const rooms = await bookingRoomsFor(pick, stay, currency);
     // Google's room names hide bunk beds and shared bathrooms (Minn Kamata's "Quadruple Room" is bunks,
     // DOYANEN BAKURO's twin a bunk with a shared bathroom): a hotel whose rooms for the party on Booking
     // are all smoking, bunks or shared-bathroom is poor value for two and is left out.
@@ -907,9 +945,10 @@ async function checkWatches(): Promise<string[]> {
  */
 const JOBS_STATE_FILE = new URL('../data/jobs-state.json', import.meta.url);
 // Kept low so background work never gets the home network blocked by Google (the region scanner and
-// the user's own lookups use the same address): one prefetch per trip length per scan, a pause
-// between page-heavy steps, watches every six hours, and a three-hour pause after any block.
-const PREFETCH_PER_LENGTH = 1;
+// the user's own lookups use the same address): two prefetches per trip length per scan (their
+// hotels then get photos ready, which the user asked for on 2026-10-20), a pause between page-heavy
+// steps, watches every six hours, and a three-hour pause after any block.
+const PREFETCH_PER_LENGTH = 2;
 const PAUSE_BETWEEN_MS = 60_000;
 const WATCH_CHECK_HOURS = 6;
 const BLOCK_COOLDOWN_HOURS = 3;
@@ -960,6 +999,9 @@ async function runJobs() {
       }
       state.prefetched[watch.id] = watch.lastScanAt.toISOString();
     }
+    // Photos and room checks for the hotels of those lists, a few each run, ready before they are shown.
+    const profiled = await profileHotels();
+    if (profiled) console.log(`jobs: profiled ${profiled} hotels`);
     if (!state.lastWatchCheck || Date.now() - Date.parse(state.lastWatchCheck) >= WATCH_CHECK_HOURS * 3_600_000) {
       alerts = await checkWatches();
       state.lastWatchCheck = new Date().toISOString();
@@ -1193,6 +1235,7 @@ try {
   else if (command === 'tick') await tick();
   else if (command === 'audit') audit();
   else if (command === 'check') await checkAll();
+  else if (command === 'profile') console.log(`profiled ${await profileHotels(Number(words[0]) || PROFILES_PER_RUN)} hotels`);
   else throw new Error('指令：report、trip、hotels-for、rooms、watch、watch-hotel、watches、unwatch、travelers、regions、add-region、remove-region、scan-now、jobs');
   if ((toTelegram || checkOnly) && segments.some(segment => segment.text)) {
     console.log = print;

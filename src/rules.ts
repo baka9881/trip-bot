@@ -126,6 +126,10 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
     if (n && !buttons.includes(`📷 第${n}間房型`)) problems.push(`第 ${n} 間沒有房型按鈕`);
   }
 
+  // A room-photo request that read no rooms is a failure to look into, not an answer (2026-10-20: a
+  // change left Booking's pages unopened and every room request said so, unnoticed).
+  for (const line of shown) if (/這次都沒有顯示房型/.test(line)) problems.push(`讀不到房型：${line}`);
+
   // Buttons to tap instead of typing (2026-10-17): a list of options always comes with them.
   if (/^\*?[A-C]\d\*? \[|^\d+\. \[/m.test(text) && !keyboard.length) problems.push('有選項但沒有按鈕');
   return problems;
