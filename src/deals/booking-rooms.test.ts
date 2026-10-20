@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { betterRate, bookingUrlFromGoogle, parseRoomFacts, parseRoomPhotoSets, parseRoomPhotos, parseRoomRow, photoKind } from './booking-rooms';
+import { betterRate, bookingUrlFromGoogle, sameHotel, parseRoomFacts, parseRoomPhotoSets, parseRoomPhotos, parseRoomRow, photoKind } from './booking-rooms';
 
 describe('Booking.com rooms', () => {
   it('finds the Booking page behind a Google price link', () => {
@@ -56,6 +56,12 @@ describe('Booking.com rooms', () => {
       { id: '2', large_url: 'https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.webp?k=b&o=' ,associated_rooms: [ '7' ] },
       "AccommodationPhoto:2":{"__typename":"AccommodationPhoto","id":2,"altText":"a white bathroom with a sink and a tub","x":{}}`;
     expect(parseRoomPhotoSets(html).get('7')?.bathroom).toBe('https://cf.bstatic.com/xdata/images/hotel/max1024x768/2.jpg?k=b&o=');
+  });
+
+  // APA Saitama Shintoshin (2026-10-19): no Booking offer on Google, so Booking is searched by name.
+  it('accepts a Booking page only when it names the hotel', () => {
+    expect(sameHotel('APA Hotel saitama shintoshin Sta. north', 'APA Hotel Saitama-Shintoshin Station North, Saitama – Updated 2026 Prices')).toBe(true);
+    expect(sameHotel('APA Hotel saitama shintoshin Sta. north', 'Toyoko Inn Omiya-eki Higashi-guchi, Saitama – Updated 2026 Prices')).toBe(false);
   });
 
   // Amawari Hotel (2026-10-19): the double's one-adult rate made it look like a room for one.

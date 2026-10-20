@@ -358,6 +358,7 @@ const PLACE_NAMES: Record<string, string> = {
   Higashiyodogawa: '東淀川區', Asahi: '旭區', Tsurumi: '鶴見區', Hirano: '平野區', Amagasaki: '尼崎', Toyonaka: '豐中', Suita: '吹田',
   Shimogyo: '下京區', Nakagyo: '中京區', Higashiyama: '東山區', Minami: '南區', Sakyo: '左京區', Kamigyo: '上京區', Ukyo: '右京區',
   Hakata: '博多區', Naka: '中區', Nakamura: '中村區', Higashi: '東區', Atsuta: '熱田區', Kokurakita: '小倉北區',
+  Kasukabe: '春日部', Koshigaya: '越谷', Tokorozawa: '所澤', Funabashi: '船橋', Ichikawa: '市川', Matsudo: '松戶',
   Omiya: '大宮區', Urawa: '浦和區', Mihama: '美濱區', Inage: '稻毛區', Kohoku: '港北區', Saiwai: '幸區',
 };
 

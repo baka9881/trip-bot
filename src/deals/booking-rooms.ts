@@ -163,16 +163,69 @@ async function readRooms(page: Page, adults: number): Promise<BookingRoom[]> {
  * page highlighting the hotel) and reads each room type. Null when Booking shows no room table,
  * e.g. when it challenges the visit.
  */
-export async function fetchBookingRooms(bookingUrl: string): Promise<{ hotelUrl: string; rooms: BookingRoom[] } | null> {
+/**
+ * A Booking.com search for one hotel by name, for the stay and party: for hotels Google shows no Booking
+ * offer for (2026-10-19: an APA in Saitama went out without a bathroom photo or a bunk check).
+ */
+export function bookingSearchUrl(name: string, stay: { outboundDate: string; returnDate: string }, adults: number, currency: string): string {
+  const url = new URL('https://www.booking.com/searchresults.en.html');
+  url.searchParams.set('ss', name);
+  url.searchParams.set('checkin', stay.outboundDate);
+  url.searchParams.set('checkout', stay.returnDate);
+  url.searchParams.set('group_adults', String(adults));
+  url.searchParams.set('no_rooms', '1');
+  url.searchParams.set('selected_currency', currency);
+  return url.toString();
+}
+
+/** Whether a Booking page title names the hotel: most of the name's words appear in it. */
+export function sameHotel(name: string, title: string): boolean {
+  const words = (text: string) => text.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, ' ').split(' ').filter(word => word.length > 1);
+  const wanted = words(name);
+  const shown = new Set(words(title));
+  return wanted.length > 0 && wanted.filter(word => shown.has(word)).length / wanted.length >= 0.6;
+}
+
+export async function fetchBookingRooms(bookingUrl: string, expectedName?: string): Promise<{ hotelUrl: string; rooms: BookingRoom[] } | null> {
   const search = new URL(bookingUrl);
   const browser = await launchBrowser();
   try {
     const context = await createStealthContext(browser);
     const page = await context.newPage();
-    await page.goto(search.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    if (!page.url().includes('/hotel/')) {
-      const hotelLink = await page.waitForFunction(() => document.querySelector('a[href*="/hotel/"]')?.getAttribute('href') ?? null,
-        undefined, { timeout: 15_000 }).then(handle => handle.jsonValue() as Promise<string>, () => null);
+    if (search.searchParams.get('ss') && !search.searchParams.get('dest_id')) {
+      // Booking sends a search by name in the address to its home page; its search box finds the
+      // hotel, and the results it opens take the stay's dates and party.
+      await page.goto('https://www.booking.com/index.en-gb.html', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      // Booking challenges automated visits after a few ("chal_t", 2026-10-19): stop rather than push on.
+      if (/chal_t=/.test(page.url())) return null;
+      await page.keyboard.press('Escape').catch(() => undefined);
+      const box = page.locator('input[name="ss"]');
+      await box.click({ timeout: 10_000 });
+      await box.fill(search.searchParams.get('ss')!);
+      const suggested = await page.locator('[role="option"]').first().click({ timeout: 8_000 }).then(() => true, () => false);
+      if (!suggested) return null;
+      await page.locator('button[type="submit"]').first().click({ timeout: 8_000 });
+      await page.waitForURL(/searchresults/, { timeout: 20_000 }).catch(() => undefined);
+      const found = new URL(page.url());
+      if (!found.searchParams.get('dest_id')) return null;
+      for (const [key, value] of search.searchParams) if (key !== 'ss') found.searchParams.set(key, value);
+      await page.goto(found.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    }
+    if (!/\/hotel\/[a-z]{2}\//.test(page.url())) {
+      // The hotel's own result: by name when one is expected (results near it come first otherwise).
+      // A string, not a function: the bundler wraps named helpers in a __name() the page does not have.
+      const hotelLink = await page.waitForFunction(`(() => {
+        const wanted = ${JSON.stringify(expectedName ?? null)};
+        const links = [...document.querySelectorAll('a[href*="/hotel/"]')];
+        if (!wanted) return links[0] ? links[0].getAttribute('href') : null;
+        const words = text => text.toLowerCase().normalize('NFKD').replace(/[^\\p{L}\\p{N}]+/gu, ' ').split(' ').filter(word => word.length > 1);
+        const want = words(wanted);
+        const match = links.find(link => {
+          const shown = new Set(words(link.innerText || ''));
+          return want.length > 0 && want.filter(word => shown.has(word)).length / want.length >= 0.6;
+        });
+        return match ? match.getAttribute('href') : null;
+      })()`, undefined, { timeout: 15_000 }).then(handle => handle.jsonValue() as Promise<string>, () => null);
       if (!hotelLink) return null;
       const hotel = new URL(hotelLink, search);
       for (const key of ['checkin', 'checkout', 'group_adults', 'no_rooms', 'selected_currency']) {
@@ -184,6 +237,8 @@ export async function fetchBookingRooms(bookingUrl: string): Promise<{ hotelUrl:
     }
     const listed = await page.waitForSelector('.hprt-table', { timeout: 15_000 }).then(() => true, () => false);
     if (!listed) return null;
+    // A search by name may land on another hotel: keep the page only when it names the one asked for.
+    if (expectedName && !sameHotel(expectedName, await page.title())) return null;
     const hotelUrl = page.url().replace(/#.*$/, '');
     const rooms = await readRooms(page, Number(search.searchParams.get('group_adults')) || 1);
     await context.close();

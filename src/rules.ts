@@ -80,6 +80,8 @@ export function checkOutput(segments: readonly CheckedSegment[], keyboard: reado
     if (seen.has(name)) problems.push(`${name}：清單裡重複出現`);
     seen.add(name);
     if (!segment.photos.length) problems.push(`${name}：沒有照片`);
+    // A room photo and a bathroom photo (2026-10-18; 2026-10-19: an APA came with the room alone).
+    else if (segment.photos.length < 2 && !hotelLines.some(line => /找不到浴室照片/.test(line))) problems.push(`${name}：只有一張照片，也沒說找不到浴室照`);
     // No shared bathroom or bunk beds in a list (2026-10-18, 2026-10-19: poor value for two).
     if (hotelLines.some(line => /^⭐.*(共用衛浴|上下鋪)|上下鋪/.test(line))) problems.push(`${name}：共用衛浴或上下鋪`);
     // Where it is (2026-10-19: hotels an hour out of town, and one in Saitama listed as Tokyo).

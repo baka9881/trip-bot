@@ -19,7 +19,7 @@ import { bookFlight, captureHotelList, checkHotelRooms, deliverDealAlerts, runDu
 import type { FlightOption } from './deals/flight-list';
 import { SHORT_TRIP_NIGHTS, chooseBookingOption, chooseFlight, chooseReturn, hotelTimes, readPrefs, type Prefs } from './prefs';
 import { createWatch, findWatch, listWatches as listRegionWatches, observations, pruneObservations, recentAlerts, scheduleAllNow, setRegionActive, updateWatch, type AlertMessage } from './store';
-import { bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
+import { bookingSearchUrl, bookingUrlFromGoogle, fetchBookingRooms, type BookingRoom } from './deals/booking-rooms';
 import { fetchTripRooms, tripHotelIdFromGoogle } from './deals/trip-rooms';
 import type { MarketLevel } from './google/market-insight';
 import { sendToTelegram, type Segment } from './telegram';
@@ -326,6 +326,8 @@ function printPicks(picks: readonly Pick[], stay: Stay, nights: number, flightPr
     const type = note.replace(/^✅ /, '');
     for (const line of phoneLines([hotel.rating !== null ? `⭐${hotel.rating.toFixed(1)}` : null, type === '私人房' ? null : type,
       hotel.publicBath ? '♨️大浴場' : null, area ? `📍${area}` : null])) console.log(line);
+    // Say so when no bathroom photo could be found anywhere, rather than leave one photo unexplained (2026-10-19).
+    if (album.length === 1) console.log('🚿 找不到浴室照片');
     // Every hotel gets a link to book or compare: Google's own page when it named no site for it.
     const booking = site ? `\n在 [${siteName(site.site)}](${site.url ?? url}) 訂` : `\n在 [Google](${url}) 看價格`;
     console.log(`每晚含稅 ${money(nightly, currency)}${booking}${saving > 0 ? `\n🏷 比平常省 ${money(saving, currency)}／晚` : ''}`);
@@ -413,7 +415,7 @@ async function hotelsFor(code: string | undefined, nearby = false) {
       const cheaper = (result?.picks ?? []).filter(pick => townCheapest === null || shownNightly(pick) < townCheapest);
       if (!result?.picks.length) { console.log('這次沒查到確認過的私人房。'); continue; }
       if (!cheaper.length) { console.log('沒有比市區便宜的'); continue; }
-      printPicks(await ownBathrooms(cheaper), areaStay, nights, perFare, row.currency, watch.country, number);
+      printPicks(await ownBathrooms(cheaper, areaStay, row.currency), areaStay, nights, perFare, row.currency, watch.country, number);
       number += cheaper.length;
     }
     return;
@@ -442,7 +444,7 @@ async function hotelsFor(code: string | undefined, nearby = false) {
   console.log(cheaper.length ? `\n🏷 住宿：${cheaper.length} 間比平常便宜` : '\n🏷 住宿：都是一般價');
   if (!fitting.length) console.log(`沒有評分 ${prefs.minRating} 以上的，先列全部`);
   console.log('');
-  printPicks(await ownBathrooms(shown), stay, nights, perFare, row.currency, watch.country);
+  printPicks(await ownBathrooms(shown, stay, row.currency), stay, nights, perFare, row.currency, watch.country);
   // Only the link: the user found the explanations under the list noise (2026-10-18). A public bath
   // keeps one short line, since its photos read as a shared bathroom.
   console.log(`\n[看全部住宿](${allLink})`);
@@ -464,13 +466,16 @@ const cachedBooking = (origin: string, stay: Stay, currency: string, country: st
  * (APA Asakusa, 2026-10-19), and the user wants the room's own bathroom: it comes from the hotel's
  * Booking page (cached; one page per such hotel), else the hotel gets no bathroom photo.
  */
-async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
+async function ownBathrooms(picks: readonly Pick[], stay: Stay, currency: string): Promise<Pick[]> {
   const { nonSmoking } = readUserPrefs();
   const result: Pick[] = [];
   for (let pick of picks) {
     const booking = pick.sites.find(site => /^booking/i.test(site.site) && site.url);
-    const bookingUrl = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
-    const found = bookingUrl ? await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl)).catch(() => null) : null;
+    // Google's Booking offer when it shows one, else Booking searched by the hotel's name (kept only
+    // when the page names that hotel): every listed hotel gets the room checks and a bathroom photo.
+    const fromGoogle = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
+    const bookingUrl = fromGoogle ?? bookingSearchUrl(pick.hotel.name, stay, Math.min(travelers, 2), currency);
+    const found = await cached('rooms', [bookingUrl], () => fetchBookingRooms(bookingUrl, fromGoogle ? undefined : pick.hotel.name)).catch(() => null);
     const rooms = found?.rooms ?? [];
     // Google's room names hide bunk beds and shared bathrooms (Minn Kamata's "Quadruple Room" is bunks,
     // DOYANEN BAKURO's twin a bunk with a shared bathroom): a hotel whose rooms for the party on Booking
@@ -483,10 +488,17 @@ async function ownBathrooms(picks: readonly Pick[]): Promise<Pick[]> {
     // suits the party says what it is.
     const cheapest = [...forParty].sort((a, b) => (a.stayTotal ?? Infinity) - (b.stayTotal ?? Infinity))[0];
     if (pick.note.startsWith('❔') && cheapest) pick = { ...pick, note: `✅ ${roomType(cheapest.name)}` };
-    if (!pick.hotel.publicBath || !pick.photos) { result.push(pick); continue; }
+    // The room's own bathroom from Booking where Google's "Bathroom" photos cannot be used (a public
+    // bath files its baths there) or are missing (2026-10-19: an APA went out with no bathroom photo).
     const listed = pick.note.replace(/^[✅❔] /, '');
-    const bathroom = [...forParty.filter(room => roomType(room.name) === listed), ...forParty].map(room => room.bathroomPhoto).find(Boolean);
-    result.push({ ...pick, photos: { ...pick.photos, bathroom: bathroom ? [bathroom] : [] } });
+    const ownBathroom = [...forParty.filter(room => roomType(room.name) === listed), ...forParty].map(room => room.bathroomPhoto).find(Boolean);
+    const photos = pick.photos ?? { rooms: [], bedroom: [], bathroom: [] };
+    if (pick.hotel.publicBath) pick = { ...pick, photos: { ...photos, bathroom: ownBathroom ? [ownBathroom] : [] } };
+    else if (!photos.bathroom.length && ownBathroom) pick = { ...pick, photos: { ...photos, bathroom: [ownBathroom] } };
+    // No room photo at all from Google: Booking's view of the room.
+    const roomView = forParty.flatMap(room => room.photos).find(url => url !== ownBathroom);
+    if (pick.photos && !pick.photos.rooms.length && !pick.photos.bedroom.length && roomView) pick = { ...pick, photos: { ...pick.photos, bedroom: [roomView] } };
+    result.push(pick);
   }
   return result;
 }
@@ -639,6 +651,8 @@ const LAST_HOTELS_FILE = new URL('../data/last-hotels.json', import.meta.url);
 type ListedHotel = { n: number; name: string; bookingUrl: string | null; tripHotelId?: string | null; nightly?: number;
   /** Google's room photos and its page: the room types of a hotel neither Booking nor Trip.com sells. */
   googlePhotos?: HotelPhotos; googleUrl?: string;
+  /** Its bookingUrl is a Booking search by name, whose page must name the hotel. */
+  bookingByName?: boolean;
   /** The nightly price the list showed (a site's price for the room); `nightly` is Google's list price, which the watch compares. */
   shown?: number };
 const listedHotels: ListedHotel[] = [];
@@ -649,7 +663,10 @@ let lastStayFor: (Stay & { currency: string; country: string; origin: string }) 
 function listHotel(n: number, name: string, sites: readonly SiteOffer[], nights: number, currency: string, nightly?: number, googlePhotos?: HotelPhotos, googleUrl?: string, shown?: number) {
   const booking = sites.find(site => /^booking/i.test(site.site) && site.url);
   const trip = sites.find(site => /^trip\.com/i.test(site.site) && site.url);
-  listedHotels.push({ n, name, bookingUrl: booking?.url ? bookingUrlFromGoogle(booking.url) : null,
+  // Booking searched by name when Google shows no Booking offer: its room photos and checks for every hotel.
+  const fromGoogle = booking?.url ? bookingUrlFromGoogle(booking.url) : null;
+  const byName = !fromGoogle && lastStayFor ? bookingSearchUrl(name, lastStayFor, Math.min(travelers, 2), currency) : null;
+  listedHotels.push({ n, name, bookingUrl: fromGoogle ?? byName, bookingByName: Boolean(byName),
     tripHotelId: trip?.url ? tripHotelIdFromGoogle(trip.url) : null, nightly, shown, googlePhotos, googleUrl });
   listedStay = { nights, currency };
 }
@@ -682,7 +699,7 @@ async function roomsFor(which: string | undefined) {
   // Booking first (its photos say which room they show); Trip.com when Booking does not sell the hotel,
   // shows no rooms, or has no room photos at all. One hotel page per site, only on request.
   let source = 'Booking';
-  let result = hotel.bookingUrl ? await fetchBookingRooms(hotel.bookingUrl) : null;
+  let result = hotel.bookingUrl ? await fetchBookingRooms(hotel.bookingUrl, hotel.bookingByName ? hotel.name : undefined) : null;
   const usable = (found: typeof result) => Boolean(found?.rooms.some(room => room.photos.length));
   const state = readJobsState();
   const tripPaused = state.tripPausedUntil !== null && Date.parse(state.tripPausedUntil) > Date.now();

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { checkOutput } from './rules';
 
 const context = { travelers: 2, nonSmoking: true, checkIn: '15:00', checkOut: '10:00' };
-const hotel = (lines: string[], photos = ['room.jpg']) => ({ text: lines.join('\n'), photos });
+const hotel = (lines: string[], photos = ['room.jpg', 'bath.jpg']) => ({ text: lines.join('\n'), photos });
 const plan = { text: ['✈️ [去 酷航 14:25→18:30](https://scoot)', '飛 3h05・約 21:00 到飯店', '[回 酷航 12:10→15:15](https://scoot)',
   '飛 4h05・08:40 就要離開飯店', '來回每人 NT$7,659', '＋托運行李約 NT$1,800（估算）', '分開訂兩張票・省 NT$1,333'].join('\n'), photos: [] };
 const good = hotel(['1. [APA Hotel](https://g)', '⭐4.3・雙人房・📍台東區', '每晚含稅 NT$3,490', '在 [Rakuten Travel](https://r) 訂',
